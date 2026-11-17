@@ -1,98 +1,178 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
+import React, { useState, useCallback } from 'react';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
-
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
-  return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function HomeScreen() {
+  const router = useRouter();
+  const [totalExpense, setTotalExpense] = useState(0);
+  const [totalIncome, setTotalIncome] = useState(0); // ভবিষ্যতে আয়ের হিসাবের জন্য
+
+  // লোকাল স্টোরেজ থেকে মোট খরচ হিসাব করে নিয়ে আসার ফাংশন
+  const loadDashboardData = async () => {
+    try {
+      const existingData = await AsyncStorage.getItem('@local_expense_db');
+      if (existingData) {
+        const expenses = JSON.parse(existingData);
+        // সব খরচের পরিমাণ যোগ করা
+        const sum = expenses.reduce((acc: number, item: any) => acc + (Number(item.amount) || 0), 0);
+        setTotalExpense(sum);
+      } else {
+        setTotalExpense(0);
+      }
+    } catch (error) {
+      console.log('Error loading dashboard data', error);
+    }
+  };
+
+  // useFocusEffect ব্যবহার করার ফলে ড্যাশবোর্ডে ফোকাস আসার সাথে সাথেই অটোমেটিক ডাটা রিফ্রেশ হবে
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboardData();
+    }, [])
+  );
+
+  // বর্তমান স্থিতি বা ব্যালেন্স হিসাব (আয় - খরচ)
+  const currentBalance = totalIncome - totalExpense;
+
   return (
-    <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
-          </ThemedText>
-        </ThemedView>
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.scrollContainer}>
+        {/* Header */}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>আমার বাজেট অ্যাপ</Text>
+          <Text style={styles.headerSubtitle}>নভেম্বর ২০২৬ (অটো-রিফ্রেশ লোকাল-ফার্স্ট)</Text>
+        </View>
 
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
+        {/* Summary Cards */}
+        <View style={styles.cardRow}>
+          <View style={[styles.card, styles.incomeCard]}>
+            <Text style={styles.cardTitle}>মোট আয়</Text>
+            <Text style={styles.cardAmount}>৳ {totalIncome.toLocaleString()}</Text>
+          </View>
+          <View style={[styles.card, styles.expenseCard]}>
+            <Text style={styles.cardTitle}>মোট খরচ</Text>
+            <Text style={styles.cardAmount}>৳ {totalExpense.toLocaleString()}</Text>
+          </View>
+        </View>
 
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
+        <View style={styles.balanceCard}>
+          <Text style={styles.balanceTitle}>বর্তমান স্থিতি (Balance)</Text>
+          <Text style={styles.balanceAmount}>৳ {currentBalance.toLocaleString()}</Text>
+        </View>
 
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
-    </ThemedView>
+        {/* Modules Section */}
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>হিসাবের মডিউলসমূহ</Text>
+          <View style={styles.moduleBox}>
+            {/* দৈনিক বাজার ও খরচ পেজে যাওয়ার লিংক */}
+            <TouchableOpacity onPress={() => router.push('/expense')}>
+              <Text style={styles.moduleText}>📌 দৈনিক বাজার ও খরচ (Market Expense)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => router.push('/annual-budget')}>
+  <Text style={styles.moduleText}>📌 ১২ মাসের বাজেট ও ট্র্যাকিং (Annual Budget)</Text>
+</TouchableOpacity>
+
+            <Text style={styles.moduleText}>📌 ধার ও বাকি খাতা (Dhar Ledger)</Text>
+            <Text style={styles.moduleText}>📌 কল্যাণ তহবিল (Welfare Fund)</Text>
+            <Text style={styles.moduleText}>📌 স্থায়ী খরচ ও ডিপিএস (Fixed Savings)</Text>
+            <Text style={styles.moduleText}>📌 বাইকের ফুয়েল ট্র্যাকিং (Vehicle Log)</Text>
+          </View>
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: 'center',
+    backgroundColor: '#f5f6fa',
+  },
+  scrollContainer: {
+    padding: 20,
+  },
+  header: {
+    marginBottom: 20,
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#2f3640',
+  },
+  headerSubtitle: {
+    fontSize: 14,
+    color: '#718093',
+    marginTop: 4,
+  },
+  cardRow: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 15,
   },
-  safeArea: {
+  card: {
     flex: 1,
-    paddingHorizontal: Spacing.four,
+    padding: 20,
+    borderRadius: 12,
+    marginHorizontal: 5,
+    elevation: 3,
+  },
+  incomeCard: {
+    backgroundColor: '#4cd137',
+  },
+  expenseCard: {
+    backgroundColor: '#e84118',
+  },
+  cardTitle: {
+    color: '#fff',
+    fontSize: 14,
+    marginBottom: 8,
+  },
+  cardAmount: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  balanceCard: {
+    backgroundColor: '#00a8ff',
+    padding: 20,
+    borderRadius: 12,
     alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
+    marginBottom: 20,
+    elevation: 3,
   },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
-    paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
+  balanceTitle: {
+    color: '#fff',
+    fontSize: 16,
+    marginBottom: 8,
   },
-  title: {
-    textAlign: 'center',
+  balanceAmount: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: 'bold',
   },
-  code: {
-    textTransform: 'uppercase',
+  sectionContainer: {
+    marginTop: 10,
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#2f3640',
+    marginBottom: 10,
+  },
+  moduleBox: {
+    backgroundColor: '#fff',
+    padding: 15,
+    borderRadius: 12,
+    elevation: 2,
+  },
+  moduleText: {
+    fontSize: 16,
+    color: '#353b48',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f2f6',
   },
 });

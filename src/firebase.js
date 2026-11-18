@@ -20,6 +20,7 @@ const firebaseConfig = {
 
 const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
 
+/** @type {import('firebase/auth').Auth} */
 let auth;
 
 try {

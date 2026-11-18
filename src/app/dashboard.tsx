@@ -1,13 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
+import { signOut } from 'firebase/auth';
 import { useCallback, useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { auth } from '../firebase';
 
 export default function HomeScreen() {
   const router = useRouter();
   const [totalExpense, setTotalExpense] = useState(0);
   const [totalIncome, setTotalIncome] = useState(0);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   const loadDashboardData = async () => {
     try {
@@ -32,6 +35,31 @@ export default function HomeScreen() {
     }, [])
   );
 
+  const handleLogout = () => {
+    Alert.alert(
+      'Logout',
+      'আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoggingOut(true);
+              await signOut(auth);
+              router.replace('/login');
+            } catch (error: any) {
+              Alert.alert('Logout Failed', error.message || 'Unable to logout.');
+            } finally {
+              setLoggingOut(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const currentBalance = totalIncome - totalExpense;
 
   return (
@@ -40,6 +68,16 @@ export default function HomeScreen() {
         <View style={styles.header}>
           <Text style={styles.headerTitle}>আমার বাজেট অ্যাপ</Text>
           <Text style={styles.headerSubtitle}>নভেম্বর ২০২৬ (অটো-রিফ্রেশ লোকাল-ফার্স্ট)</Text>
+          <Text style={styles.userEmail}>{auth.currentUser?.email || ''}</Text>
+          <TouchableOpacity
+            style={styles.logoutButton}
+            onPress={handleLogout}
+            disabled={loggingOut}
+          >
+            <Text style={styles.logoutText}>
+              {loggingOut ? 'Logging out...' : 'Logout'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.cardRow}>
@@ -84,6 +122,12 @@ const styles = StyleSheet.create({
   header: { marginBottom: 20, alignItems: 'center' },
   headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#2f3640' },
   headerSubtitle: { fontSize: 14, color: '#718093', marginTop: 4 },
+  userEmail: { fontSize: 13, color: '#718093', marginTop: 8 },
+  logoutButton: {
+    marginTop: 12, backgroundColor: '#fee2e2',
+    paddingHorizontal: 20, paddingVertical: 9, borderRadius: 8,
+  },
+  logoutText: { color: '#dc2626', fontWeight: 'bold' },
   cardRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
   card: { flex: 1, padding: 20, borderRadius: 12, marginHorizontal: 5, elevation: 3 },
   incomeCard: { backgroundColor: '#4cd137' },

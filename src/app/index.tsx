@@ -1,23 +1,45 @@
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
+import { onAuthStateChanged } from 'firebase/auth';
 import { useEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
+import { auth } from '../firebase';
 
 export default function Index() {
   const router = useRouter();
 
   useEffect(() => {
-    const checkOnboarding = async () => {
+    let unsubscribe: (() => void) | undefined;
+    let active = true;
+
+    const checkAppState = async () => {
       try {
         const completed = await AsyncStorage.getItem('@onboarding_completed');
-        router.replace(completed === 'true' ? '/dashboard' : '/onboarding');
+
+        if (!active) return;
+
+        if (completed !== 'true') {
+          router.replace('/onboarding');
+          return;
+        }
+
+        unsubscribe = onAuthStateChanged(auth, (user) => {
+          if (!active) return;
+          router.replace(user ? '/dashboard' : '/login');
+        });
       } catch (error) {
-        console.log('Onboarding check error:', error);
-        router.replace('/onboarding');
+        console.log('App state check error:', error);
+        if (active) router.replace('/onboarding');
       }
     };
 
-    checkOnboarding();
+    checkAppState();
+
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
   }, []);
 
   return (

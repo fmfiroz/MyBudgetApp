@@ -3,15 +3,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useRef, useState } from 'react';
 import {
-    Dimensions,
-    NativeScrollEvent,
-    NativeSyntheticEvent,
-    ScrollView,
-    type ScrollViewInstance,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View
+  Dimensions,
+  NativeScrollEvent,
+  NativeSyntheticEvent,
+  ScrollView,
+  type ScrollViewInstance,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -63,7 +63,7 @@ export default function OnboardingScreen() {
 
     try {
       await AsyncStorage.setItem('@onboarding_completed', 'true');
-      router.replace('/dashboard');
+      router.replace('/login');
     } catch (error) {
       console.log('Onboarding save error:', error);
       setLoading(false);

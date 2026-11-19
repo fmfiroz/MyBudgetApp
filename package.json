@@ -6,6 +6,7 @@
     "@expo/ui": "~58.0.29",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "9.2.1",
+    "@react-native-google-signin/google-signin": "^17.0.0",
     "expo": "~58.0.26",
     "expo-auth-session": "~58.0.19",
     "expo-constants": "~58.0.16",
@@ -42,8 +43,8 @@
   "scripts": {
     "start": "expo start",
     "reset-project": "node ./scripts/reset-project.js",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint"
   },

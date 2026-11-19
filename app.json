@@ -1,3 +1,4 @@
+
 {
   "expo": {
     "name": "MyBudgetApp",
@@ -8,9 +9,13 @@
     "scheme": "mybudgetapp",
     "userInterfaceStyle": "automatic",
     "ios": {
+      "bundleIdentifier": "com.fmfiroz.MyBudgetApp",
+      "googleServicesFile": "./GoogleService-Info.plist",
       "icon": "./assets/expo.icon"
     },
     "android": {
+      "package": "com.fmfiroz.MyBudgetApp",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -35,7 +40,8 @@
       ],
       "@react-native-community/datetimepicker",
       "expo-sqlite",
-      "expo-web-browser"
+      "expo-web-browser",
+      "@react-native-google-signin/google-signin"
     ],
     "experiments": {
       "typedRoutes": true,

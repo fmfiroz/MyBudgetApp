@@ -70,10 +70,13 @@ export default function HomeScreen() {
           <Text style={styles.headerSubtitle}>নভেম্বর ২০২৬ (অটো-রিফ্রেশ লোকাল-ফার্স্ট)</Text>
           <Text style={styles.userEmail}>{auth.currentUser?.email || ''}</Text>
           <TouchableOpacity
-            style={styles.logoutButton}
-            onPress={handleLogout}
-            disabled={loggingOut}
-          >
+  style={styles.logoutButton}
+  onPress={() => {
+    console.log('Logout button pressed');
+    handleLogout();
+  }}
+  disabled={false}
+>
             <Text style={styles.logoutText}>
               {loggingOut ? 'Logging out...' : 'Logout'}
             </Text>

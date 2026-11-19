@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "659773105401",
+    "project_id": "mybudgetapp-ae452",
+    "storage_bucket": "mybudgetapp-ae452.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:659773105401:android:0f9f288ca3288ebcdd2e28",
+        "android_client_info": {
+          "package_name": "com.fmfiroz.MyBudgetApp"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "659773105401-loc8eht4b599dqg0ks02bl0lplujjauj.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.fmfiroz.MyBudgetApp",
+            "certificate_hash": "15c78d9643b4d4463fecf046f7be1e72a69842f6"
+          }
+        },
+        {
+          "client_id": "659773105401-2pb5ef8c61qem8gqg4k5dvkh0sfeltcq.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBKDZirPK3M9Z4Ec5sBupe7P92iFq51L_E"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "659773105401-2pb5ef8c61qem8gqg4k5dvkh0sfeltcq.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "659773105401-27aeocnm36t21g2a33krfbf4dv114jhu.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.fmfiroz.MyBudgetApp"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

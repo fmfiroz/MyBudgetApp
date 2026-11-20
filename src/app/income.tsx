@@ -3,19 +3,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Modal,
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
 
 // Income Year: July থেকে Next Year June পর্যন্ত ১২ মাস
@@ -74,6 +75,25 @@ const formatFiscalYearLabel = (startYear: number) => {
 const getMonthCalendarYear = (month: string, startYear: number) => {
   const idx = FISCAL_MONTHS.indexOf(month);
   return idx >= 0 && idx <= 5 ? startYear : startYear + 1;
+};
+
+const getCurrentFiscalMonthName = (): string => {
+  const jsMonth = new Date().getMonth(); // 0=Jan ... 11=Dec
+  const monthNames = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return monthNames[jsMonth] || 'July';
 };
 
 const buildDefaultCells = (mode: CellMode, val: number): { [month: string]: CellConfig } => {
@@ -216,6 +236,31 @@ const mergeAndNormalizeRows = (savedRows: any[]): IncomeRow[] => {
 
 export default function IncomeSheetScreen() {
   const router = useRouter();
+  const { width: screenWidth } = useWindowDimensions();
+
+  // নিখুঁত গ্রিড সিস্টেম:
+  // ডান পাশের দৃশ্যমান প্রস্থকে ঠিক ২টি সমান মাস কলামে ভাগ করা হয়েছে,
+  // যাতে স্লাইড করার পর প্রতিটি মাস গ্রিড লাইনের সাথে পুরোপুরি ফিট হয়ে বসে (ডানে/বামে কাটা অংশ না থাকে)।
+  const isMobileScreen = screenWidth < 768;
+  const visibleColumnsCount = isMobileScreen ? 2 : Math.max(4, Math.floor((screenWidth - 215) / 114));
+  const rawRightWidth = Math.max(200, Math.floor(screenWidth - (isMobileScreen ? 136 : 215)));
+  const monthColWidth = Math.floor(rawRightWidth / visibleColumnsCount);
+  const exactRightViewportWidth = monthColWidth * visibleColumnsCount;
+  const descColWidth = Math.max(120, Math.floor(screenWidth) - exactRightViewportWidth);
+
+  // প্রতিটি মাস কলামের শুরু অফসেট (Grid Snap Points)
+  const gridSnapOffsets = useMemo(() => {
+    const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+    const offsets: number[] = [];
+    for (let i = 0; i <= maxStartIndex; i++) {
+      offsets.push(i * monthColWidth);
+    }
+    return offsets;
+  }, [monthColWidth, visibleColumnsCount]);
+
+  const monthScrollRef = useRef<ScrollView | null>(null);
+  const initialScrollDoneRef = useRef<boolean>(false);
+  const [activeGridIndex, setActiveGridIndex] = useState<number>(0);
 
   const getInitialFiscalStartYear = () => {
     const now = new Date();
@@ -226,14 +271,11 @@ export default function IncomeSheetScreen() {
   const [rows, setRows] = useState<IncomeRow[]>(DEFAULT_ROWS);
   const [exportingPdf, setExportingPdf] = useState<boolean>(false);
 
-  // ওয়েবে ডাউনলোডের পর শেয়ার অপশন দেখানোর জন্য মডাল স্টেট
   const [pdfActionModalVisible, setPdfActionModalVisible] = useState<boolean>(false);
   const [generatedHtml, setGeneratedHtml] = useState<string>('');
 
-  // Hidden Items Modal
   const [hiddenModalVisible, setHiddenModalVisible] = useState(false);
 
-  // Add Row Modal
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [newDesc, setNewDesc] = useState('');
   const [newType, setNewType] = useState<ItemType>('income');
@@ -242,7 +284,6 @@ export default function IncomeSheetScreen() {
   const [applyToAllMonths, setApplyToAllMonths] = useState(false);
   const [selectedStartMonth, setSelectedStartMonth] = useState<string>('July');
 
-  // Edit Cell Modal
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingRow, setEditingRow] = useState<IncomeRow | null>(null);
   const [editingMonth, setEditingMonth] = useState<string>('July');
@@ -269,6 +310,55 @@ export default function IncomeSheetScreen() {
     };
     loadData();
   }, [fiscalStartYear]);
+
+  const snapToGridIndex = useCallback(
+    (targetIdx: number, animated = true) => {
+      const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+      const clampedIdx = Math.max(0, Math.min(maxStartIndex, targetIdx));
+      setActiveGridIndex(clampedIdx);
+      monthScrollRef.current?.scrollTo({
+        x: clampedIdx * monthColWidth,
+        animated,
+      });
+    },
+    [monthColWidth, visibleColumnsCount]
+  );
+
+  // শুরুতে Current Month গ্রিডের প্রথম কলামে এনে বসিয়ে দেওয়া
+  useEffect(() => {
+    if (!initialScrollDoneRef.current && monthColWidth > 0) {
+      initialScrollDoneRef.current = true;
+      const currentMonthName = getCurrentFiscalMonthName();
+      const idx = FISCAL_MONTHS.indexOf(currentMonthName);
+      if (idx >= 0) {
+        setTimeout(() => {
+          snapToGridIndex(idx, false);
+        }, 60);
+      }
+    }
+  }, [monthColWidth, snapToGridIndex]);
+
+  const handleJumpToCurrentMonth = () => {
+    const currentMonthName = getCurrentFiscalMonthName();
+    const idx = FISCAL_MONTHS.indexOf(currentMonthName);
+    if (idx >= 0) {
+      snapToGridIndex(idx, true);
+    }
+  };
+
+  // স্লাইড শেষ হলে ঠিক গ্রিড লাইনে স্ন্যাপ নিশ্চিত করা
+  const handleGridScrollEnd = (event: any) => {
+    const offsetX = event?.nativeEvent?.contentOffset?.x || 0;
+    const nearestIdx = Math.round(offsetX / monthColWidth);
+    const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+    const clampedIdx = Math.max(0, Math.min(maxStartIndex, nearestIdx));
+    setActiveGridIndex(clampedIdx);
+
+    const exactX = clampedIdx * monthColWidth;
+    if (Math.abs(offsetX - exactX) > 1 && monthScrollRef.current) {
+      monthScrollRef.current.scrollTo({ x: exactX, animated: true });
+    }
+  };
 
   const saveRowsForFiscalYear = useCallback(
     async (startYr: number, updatedRows: IncomeRow[]) => {
@@ -610,7 +700,6 @@ export default function IncomeSheetScreen() {
     `;
   };
 
-  // ওয়েবে সরাসরি ফাইল ডাউনলোড করা
   const triggerWebDownload = (htmlContent: string) => {
     if (typeof document === 'undefined') return;
     const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
@@ -624,7 +713,6 @@ export default function IncomeSheetScreen() {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  // ওয়েবে প্রিন্ট / Save as PDF ওপেন করা
   const triggerWebPrintPdf = async (htmlContent: string) => {
     if (typeof window !== 'undefined') {
       const printWindow = window.open('', '_blank');
@@ -641,8 +729,7 @@ export default function IncomeSheetScreen() {
     await Print.printAsync({ html: htmlContent });
   };
 
-  // ওয়েবে Share API দিয়ে শেয়ার করা
-  const triggerWebShare = async (htmlContent: string) => {
+  const triggerWebShare = async () => {
     const shareText = `Income Year Report (${fiscalLabel}) | Total Payable: ${yearlyTotals.annualPayable.toLocaleString('en-IN')} Tk. | Total Deduction: ${yearlyTotals.annualDeduction.toLocaleString('en-IN')} Tk. | Net Pay: ${yearlyTotals.annualNetPay.toLocaleString('en-IN')} Tk.`;
     const nav = typeof navigator !== 'undefined' ? (navigator as any) : null;
     if (nav && typeof nav.share === 'function') {
@@ -658,23 +745,20 @@ export default function IncomeSheetScreen() {
     }
     if (nav?.clipboard?.writeText) {
       await nav.clipboard.writeText(shareText);
-      Alert.alert('কপি হয়েছে', 'রিপোর্টের সারসংক্ষেপ ক্লিপবোর্ডে কপি করা হয়েছে—এখন যেকোনো জায়গায় পেস্ট করে শেয়ার করতে পারেন।');
+      Alert.alert('কপি হয়েছে', 'রিপোর্টের সারসংক্ষেপ ক্লিপবোর্ডে কপি করা হয়েছে।');
     }
   };
 
-  // Download + Share বাটনের মূল হ্যান্ডলার
   const handleDownloadAndSharePdf = async () => {
     try {
       setExportingPdf(true);
       const htmlContent = buildReportHtml();
 
       if (Platform.OS === 'web') {
-        // ওয়েবে ডাউনলোড শুরু হবে এবং পাশাপাশি Save as PDF / Share অপশন মডাল আসবে
         triggerWebDownload(htmlContent);
         setGeneratedHtml(htmlContent);
         setPdfActionModalVisible(true);
       } else {
-        // Android / iOS-এ PDF ফাইল তৈরি করে Share/Save মেনু ওপেন করবে
         const { uri } = await Print.printToFileAsync({ html: htmlContent });
         const canShare = await Sharing.isAvailableAsync();
         if (canShare) {
@@ -700,7 +784,10 @@ export default function IncomeSheetScreen() {
       if (row.isBasic) {
         const rawVal = parseNumericValue(row.cells?.[month]?.value);
         return (
-          <View key={month} style={[styles.cell, styles.monthColWidth, styles.basicCellBg]}>
+          <View
+            key={month}
+            style={[styles.cell, { width: monthColWidth }, styles.basicCellBg]}
+          >
             <TextInput
               style={[styles.cellInput, { fontWeight: '700', color: '#0F172A' }]}
               keyboardType="numeric"
@@ -724,7 +811,7 @@ export default function IncomeSheetScreen() {
           onPress={() => openCellEditor(row, month)}
           style={[
             styles.cell,
-            styles.monthColWidth,
+            { width: monthColWidth },
             cell.mode === 'percent' && cellVal > 0 && styles.percentCellBg,
           ]}
         >
@@ -747,13 +834,16 @@ export default function IncomeSheetScreen() {
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
         </TouchableOpacity>
         <View style={styles.headerTitleBox}>
-          <Text style={styles.headerTitle}>Income Year Sheet ({fiscalLabel})</Text>
-          <Text style={styles.headerSub}>
-            July {fiscalStartYear} – June {fiscalStartYear + 1} • Jul Basic→Next Jun | Jan Basic→Jun
+          <Text style={styles.headerTitle}>Income Sheet ({fiscalLabel})</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>
+            খাত ফিক্সড • গ্রিড স্ন্যাপ স্লাইড
           </Text>
         </View>
 
-        {/* Download & Share PDF Button */}
+        <TouchableOpacity style={styles.nowBtn} onPress={handleJumpToCurrentMonth}>
+          <Text style={styles.nowBtnText}>Now</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.pdfBtn}
           onPress={handleDownloadAndSharePdf}
@@ -763,8 +853,8 @@ export default function IncomeSheetScreen() {
             <ActivityIndicator size="small" color="#FFFFFF" />
           ) : (
             <>
-              <Ionicons name="download-outline" size={16} color="#FFFFFF" />
-              <Text style={styles.pdfBtnText}>Download & Share</Text>
+              <Ionicons name="download-outline" size={15} color="#FFFFFF" />
+              <Text style={styles.pdfBtnText}>PDF</Text>
             </>
           )}
         </TouchableOpacity>
@@ -780,7 +870,7 @@ export default function IncomeSheetScreen() {
         </View>
       </View>
 
-      {/* Action Bar */}
+      {/* Action Bar + Grid Step Controls */}
       <View style={styles.actionBar}>
         <TouchableOpacity
           style={[styles.addBtn, { backgroundColor: '#16A34A' }]}
@@ -789,8 +879,8 @@ export default function IncomeSheetScreen() {
             setAddModalVisible(true);
           }}
         >
-          <Ionicons name="add-circle-outline" size={17} color="#FFF" />
-          <Text style={styles.addBtnText}>+ Add Income</Text>
+          <Ionicons name="add-circle-outline" size={16} color="#FFF" />
+          <Text style={styles.addBtnText}>+ Income</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -800,66 +890,82 @@ export default function IncomeSheetScreen() {
             setAddModalVisible(true);
           }}
         >
-          <Ionicons name="remove-circle-outline" size={17} color="#FFF" />
-          <Text style={styles.addBtnText}>+ Add Deduction</Text>
+          <Ionicons name="remove-circle-outline" size={16} color="#FFF" />
+          <Text style={styles.addBtnText}>+ Deduction</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={[styles.addBtn, { backgroundColor: '#334155' }]}
           onPress={() => setHiddenModalVisible(true)}
         >
-          <Ionicons name="eye-off-outline" size={17} color="#FFF" />
+          <Ionicons name="eye-off-outline" size={16} color="#FFF" />
           <Text style={styles.addBtnText}>Hidden ({hiddenRows.length})</Text>
         </TouchableOpacity>
+
+        {/* Grid Step Left/Right Buttons */}
+        <View style={styles.gridStepGroup}>
+          <TouchableOpacity
+            style={styles.gridStepBtn}
+            onPress={() => snapToGridIndex(activeGridIndex - 1, true)}
+          >
+            <Ionicons name="chevron-back" size={16} color="#1E3A8A" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.gridStepBtn}
+            onPress={() => snapToGridIndex(activeGridIndex + 1, true)}
+          >
+            <Ionicons name="chevron-forward" size={16} color="#1E3A8A" />
+          </TouchableOpacity>
+        </View>
       </View>
 
-      {/* Excel Grid */}
+      {/* Fixed Description Column + Exact Grid-Snapped Month Columns */}
       <ScrollView style={styles.verticalScroll}>
         <View style={styles.sheetWrapper}>
-          {/* Left Fixed Column */}
-          <View style={styles.fixedColumn}>
-            <View style={[styles.headerCell, styles.descColWidth]}>
+          {/* Left Fixed Description Column */}
+          <View style={[styles.fixedColumn, { width: descColWidth }]}>
+            <View style={[styles.headerCell, { width: descColWidth }]}>
               <Text style={styles.headerCellText}>খাত / Description</Text>
             </View>
 
-            <View style={[styles.sectionBanner, styles.descColWidth]}>
-              <Text style={styles.sectionBannerText}>INCOME & ALLOWANCES (+)</Text>
+            <View style={[styles.sectionBanner, { width: descColWidth }]}>
+              <Text style={styles.sectionBannerText}>INCOME (+)</Text>
             </View>
 
             {visibleIncomeRows.map((row) => (
-              <View key={row.id} style={[styles.descCell, styles.descColWidth]}>
-                <View style={{ flex: 1, marginRight: 4 }}>
+              <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
+                <View style={{ flex: 1, marginRight: 3 }}>
                   <Text style={styles.descText} numberOfLines={2}>
                     {row.description}
                   </Text>
                   {row.isBasic && (
-                    <Text style={styles.hintSubText}>Jul→Next Jun | Jan→Jun</Text>
+                    <Text style={styles.hintSubText}>Jul→Jun | Jan→Jun</Text>
                   )}
                 </View>
                 <TouchableOpacity
                   onPress={() => handleToggleHideRow(row.id, true)}
                   accessibilityLabel="Hide item"
                 >
-                  <Ionicons name="eye-off-outline" size={16} color="#64748B" />
+                  <Ionicons name="eye-off-outline" size={15} color="#64748B" />
                 </TouchableOpacity>
               </View>
             ))}
 
             {/* Total Payable (Tk.) */}
-            <View style={[styles.summaryCell, styles.totalIncomeBg, styles.descColWidth]}>
+            <View style={[styles.summaryCell, styles.totalIncomeBg, { width: descColWidth }]}>
               <Text style={styles.summaryTitle}>Total Payable (Tk.)</Text>
             </View>
 
             {/* Deductions Banner */}
-            <View style={[styles.sectionBanner, styles.descColWidth]}>
+            <View style={[styles.sectionBanner, { width: descColWidth }]}>
               <Text style={[styles.sectionBannerText, { color: '#B91C1C' }]}>
                 DEDUCTIONS (-)
               </Text>
             </View>
 
             {visibleDeductionRows.map((row) => (
-              <View key={row.id} style={[styles.descCell, styles.descColWidth]}>
-                <View style={{ flex: 1, marginRight: 4 }}>
+              <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
+                <View style={{ flex: 1, marginRight: 3 }}>
                   <Text style={styles.descText} numberOfLines={2}>
                     {row.description}
                   </Text>
@@ -868,105 +974,133 @@ export default function IncomeSheetScreen() {
                   onPress={() => handleToggleHideRow(row.id, true)}
                   accessibilityLabel="Hide item"
                 >
-                  <Ionicons name="eye-off-outline" size={16} color="#64748B" />
+                  <Ionicons name="eye-off-outline" size={15} color="#64748B" />
                 </TouchableOpacity>
               </View>
             ))}
 
             {/* Total Deduction (Tk.) */}
-            <View style={[styles.summaryCell, styles.totalDeductionBg, styles.descColWidth]}>
+            <View style={[styles.summaryCell, styles.totalDeductionBg, { width: descColWidth }]}>
               <Text style={styles.summaryTitle}>Total Deduction (Tk.)</Text>
             </View>
 
             {/* Net Pay (Tk.) */}
-            <View style={[styles.summaryCell, styles.netIncomeBg, styles.descColWidth]}>
+            <View style={[styles.summaryCell, styles.netIncomeBg, { width: descColWidth }]}>
               <Text style={[styles.summaryTitle, { color: '#1D4ED8' }]}>Net Pay (Tk.)</Text>
             </View>
           </View>
 
-          {/* Right Horizontal Scrollable Months */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={true}>
-            <View>
-              <View style={styles.row}>
-                {FISCAL_MONTHS.map((month) => {
-                  const calYear = getMonthCalendarYear(month, fiscalStartYear);
-                  return (
-                    <View key={month} style={[styles.headerCell, styles.monthColWidth]}>
-                      <Text style={styles.headerCellText}>
-                        {month} {String(calYear).slice(-2)}
+          {/* Right Exact-Grid Viewport (কখনো ডানে/বামে আংশিক মাস কাটা থাকবে না) */}
+          <View style={{ width: exactRightViewportWidth, overflow: 'hidden' }}>
+            <ScrollView
+              ref={monthScrollRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              snapToOffsets={gridSnapOffsets}
+              snapToAlignment="start"
+              decelerationRate="fast"
+              disableIntervalMomentum={true}
+              onMomentumScrollEnd={handleGridScrollEnd}
+              onScrollEndDrag={handleGridScrollEnd}
+            >
+              <View>
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => {
+                    const calYear = getMonthCalendarYear(month, fiscalStartYear);
+                    const isCurrent = month === getCurrentFiscalMonthName();
+                    return (
+                      <View
+                        key={month}
+                        style={[
+                          styles.headerCell,
+                          { width: monthColWidth },
+                          isCurrent && styles.currentMonthHeaderCell,
+                        ]}
+                      >
+                        <Text style={styles.headerCellText} numberOfLines={1}>
+                          {month} {String(calYear).slice(-2)}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((m) => (
+                    <View key={m} style={[styles.sectionBanner, { width: monthColWidth }]} />
+                  ))}
+                </View>
+
+                {visibleIncomeRows.map((row) => (
+                  <View key={row.id} style={styles.row}>
+                    {renderMonthCells(row)}
+                  </View>
+                ))}
+
+                {/* Total Payable (Tk.) Values */}
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => (
+                    <View
+                      key={month}
+                      style={[
+                        styles.summaryCell,
+                        styles.totalIncomeBg,
+                        { width: monthColWidth },
+                      ]}
+                    >
+                      <Text style={[styles.summaryValue, { color: '#15803D' }]}>
+                        {monthlySummary[month].totalPayable.toLocaleString('en-IN')}
                       </Text>
                     </View>
-                  );
-                })}
-              </View>
-
-              <View style={styles.row}>
-                {FISCAL_MONTHS.map((m) => (
-                  <View key={m} style={[styles.sectionBanner, styles.monthColWidth]} />
-                ))}
-              </View>
-
-              {visibleIncomeRows.map((row) => (
-                <View key={row.id} style={styles.row}>
-                  {renderMonthCells(row)}
+                  ))}
                 </View>
-              ))}
 
-              {/* Total Payable (Tk.) Values */}
-              <View style={styles.row}>
-                {FISCAL_MONTHS.map((month) => (
-                  <View
-                    key={month}
-                    style={[styles.summaryCell, styles.totalIncomeBg, styles.monthColWidth]}
-                  >
-                    <Text style={[styles.summaryValue, { color: '#15803D' }]}>
-                      {monthlySummary[month].totalPayable.toLocaleString('en-IN')}
-                    </Text>
-                  </View>
-                ))}
-              </View>
-
-              <View style={styles.row}>
-                {FISCAL_MONTHS.map((m) => (
-                  <View key={m} style={[styles.sectionBanner, styles.monthColWidth]} />
-                ))}
-              </View>
-
-              {visibleDeductionRows.map((row) => (
-                <View key={row.id} style={styles.row}>
-                  {renderMonthCells(row)}
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((m) => (
+                    <View key={m} style={[styles.sectionBanner, { width: monthColWidth }]} />
+                  ))}
                 </View>
-              ))}
 
-              {/* Total Deduction (Tk.) Values */}
-              <View style={styles.row}>
-                {FISCAL_MONTHS.map((month) => (
-                  <View
-                    key={month}
-                    style={[styles.summaryCell, styles.totalDeductionBg, styles.monthColWidth]}
-                  >
-                    <Text style={[styles.summaryValue, { color: '#B91C1C' }]}>
-                      {monthlySummary[month].totalDeduction.toLocaleString('en-IN')}
-                    </Text>
+                {visibleDeductionRows.map((row) => (
+                  <View key={row.id} style={styles.row}>
+                    {renderMonthCells(row)}
                   </View>
                 ))}
-              </View>
 
-              {/* Net Pay (Tk.) Values */}
-              <View style={styles.row}>
-                {FISCAL_MONTHS.map((month) => (
-                  <View
-                    key={month}
-                    style={[styles.summaryCell, styles.netIncomeBg, styles.monthColWidth]}
-                  >
-                    <Text style={[styles.summaryValue, { color: '#1D4ED8' }]}>
-                      {monthlySummary[month].netPay.toLocaleString('en-IN')}
-                    </Text>
-                  </View>
-                ))}
+                {/* Total Deduction (Tk.) Values */}
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => (
+                    <View
+                      key={month}
+                      style={[
+                        styles.summaryCell,
+                        styles.totalDeductionBg,
+                        { width: monthColWidth },
+                      ]}
+                    >
+                      <Text style={[styles.summaryValue, { color: '#B91C1C' }]}>
+                        {monthlySummary[month].totalDeduction.toLocaleString('en-IN')}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                {/* Net Pay (Tk.) Values */}
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => (
+                    <View
+                      key={month}
+                      style={[styles.summaryCell, styles.netIncomeBg, { width: monthColWidth }]}
+                    >
+                      <Text style={[styles.summaryValue, { color: '#1D4ED8' }]}>
+                        {monthlySummary[month].netPay.toLocaleString('en-IN')}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
               </View>
-            </View>
-          </ScrollView>
+            </ScrollView>
+          </View>
         </View>
       </ScrollView>
 
@@ -975,10 +1109,6 @@ export default function IncomeSheetScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>রিপোর্ট ডাউনলোড ও শেয়ার ({fiscalLabel})</Text>
-            <Text style={{ fontSize: 12.5, color: '#475569', marginBottom: 14 }}>
-              রিপোর্ট ফাইলটি ডাউনলোড শুরু হয়েছে। এখান থেকে সরাসরি PDF হিসেবে সেভ বা শেয়ার করতে পারেন:
-            </Text>
-
             <View style={{ gap: 10, marginBottom: 14 }}>
               <TouchableOpacity
                 style={[styles.addBtn, { backgroundColor: '#7C3AED', paddingVertical: 11 }]}
@@ -990,7 +1120,7 @@ export default function IncomeSheetScreen() {
 
               <TouchableOpacity
                 style={[styles.addBtn, { backgroundColor: '#16A34A', paddingVertical: 11 }]}
-                onPress={() => triggerWebShare(generatedHtml)}
+                onPress={triggerWebShare}
               >
                 <Ionicons name="share-social-outline" size={18} color="#FFF" />
                 <Text style={styles.addBtnText}>Share Summary</Text>
@@ -1257,60 +1387,72 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 10,
     paddingVertical: 10,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
-    gap: 6,
+    gap: 5,
   },
   backBtn: {
-    padding: 4,
+    padding: 3,
   },
   headerTitleBox: {
     flex: 1,
   },
   headerTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: '#0F172A',
   },
   headerSub: {
-    fontSize: 10.5,
+    fontSize: 10,
     color: '#64748B',
+  },
+  nowBtn: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  nowBtnText: {
+    color: '#15803D',
+    fontWeight: '700',
+    fontSize: 11,
   },
   pdfBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#7C3AED',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 8,
-    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 7,
+    gap: 3,
   },
   pdfBtnText: {
     color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 12,
+    fontSize: 11.5,
   },
   yearBox: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     paddingVertical: 5,
-    borderRadius: 8,
-    gap: 4,
+    borderRadius: 7,
+    gap: 2,
   },
   yearText: {
     fontWeight: '700',
     color: '#1E40AF',
-    fontSize: 13,
+    fontSize: 12,
   },
   actionBar: {
     flexDirection: 'row',
+    alignItems: 'center',
     padding: 8,
-    gap: 8,
+    gap: 6,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
@@ -1322,12 +1464,24 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingVertical: 8,
     borderRadius: 8,
-    gap: 5,
+    gap: 4,
   },
   addBtnText: {
     color: '#FFFFFF',
     fontWeight: '600',
-    fontSize: 12,
+    fontSize: 11.5,
+  },
+  gridStepGroup: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  gridStepBtn: {
+    width: 30,
+    height: 32,
+    borderRadius: 7,
+    backgroundColor: '#DBEAFE',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   verticalScroll: {
     flex: 1,
@@ -1345,12 +1499,6 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
   },
-  descColWidth: {
-    width: 215,
-  },
-  monthColWidth: {
-    width: 112,
-  },
   headerCell: {
     height: 42,
     backgroundColor: '#1E293B',
@@ -1358,24 +1506,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderRightWidth: 1,
     borderRightColor: '#334155',
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
+  },
+  currentMonthHeaderCell: {
+    backgroundColor: '#1D4ED8',
   },
   headerCellText: {
     color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 12,
+    fontSize: 11.5,
     textAlign: 'center',
   },
   sectionBanner: {
     height: 28,
     backgroundColor: '#F1F5F9',
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     borderBottomWidth: 1,
     borderBottomColor: '#CBD5E1',
   },
   sectionBannerText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: '700',
     color: '#15803D',
   },
@@ -1384,20 +1535,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     borderBottomWidth: 1,
     borderBottomColor: '#CBD5E1',
     backgroundColor: '#F8FAFC',
   },
   descText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '600',
     color: '#1E293B',
   },
   hintSubText: {
-    fontSize: 9.5,
+    fontSize: 9,
     color: '#64748B',
-    marginTop: 2,
+    marginTop: 1,
   },
   cell: {
     height: 52,
@@ -1405,7 +1556,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderColor: '#CBD5E1',
     justifyContent: 'center',
-    paddingHorizontal: 6,
+    paddingHorizontal: 4,
     backgroundColor: '#FFFFFF',
   },
   basicCellBg: {
@@ -1416,19 +1567,19 @@ const styles = StyleSheet.create({
   },
   cellInput: {
     textAlign: 'right',
-    fontSize: 13,
+    fontSize: 12.5,
     color: '#0F172A',
     paddingVertical: 4,
   },
   resolvedAmountText: {
     textAlign: 'right',
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '600',
     color: '#0F172A',
   },
   percentBadge: {
     textAlign: 'right',
-    fontSize: 9.5,
+    fontSize: 9,
     color: '#15803D',
     fontWeight: '600',
     marginTop: 1,
@@ -1436,7 +1587,7 @@ const styles = StyleSheet.create({
   summaryCell: {
     height: 42,
     justifyContent: 'center',
-    paddingHorizontal: 8,
+    paddingHorizontal: 6,
     borderRightWidth: 1,
     borderBottomWidth: 1,
     borderColor: '#94A3B8',
@@ -1451,12 +1602,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#DBEAFE',
   },
   summaryTitle: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#0F172A',
   },
   summaryValue: {
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '700',
     textAlign: 'right',
   },

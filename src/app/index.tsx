@@ -2,22 +2,25 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Alert,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TouchableOpacity,
-    View,
+  Alert,
+  Animated,
+  Dimensions,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-    ALL_DASHBOARD_MODULES,
-    DASHBOARD_ENABLED_MODULES_KEY,
-    DEFAULT_ENABLED_MODULE_IDS,
+  ALL_DASHBOARD_MODULES,
+  DASHBOARD_ENABLED_MODULES_KEY,
+  DEFAULT_ENABLED_MODULE_IDS,
 } from '../constants/dashboardModules';
 import { auth } from '../firebase';
 
@@ -27,12 +30,18 @@ const LANGUAGE_STORAGE_KEY = '@mybudget_app_language_v1';
 
 export default function HomeScreen() {
   const router = useRouter();
+  const screenWidth = Dimensions.get('window').width;
+  const drawerWidth = Math.min(320, Math.round(screenWidth * 0.82));
+
   const [lang, setLang] = useState<AppLanguage>('bn');
   const [enabledModuleIds, setEnabledModuleIds] = useState<string[]>(
     DEFAULT_ENABLED_MODULE_IDS
   );
   const [drawerVisible, setDrawerVisible] = useState<boolean>(false);
   const [loggingOut, setLoggingOut] = useState<boolean>(false);
+
+  const slideAnim = useRef(new Animated.Value(-drawerWidth)).current;
+  const backdropAnim = useRef(new Animated.Value(0)).current;
 
   const loadDashboardPrefs = useCallback(async () => {
     try {
@@ -68,6 +77,50 @@ export default function HomeScreen() {
     }, [loadDashboardPrefs])
   );
 
+  const openDrawer = () => {
+    slideAnim.setValue(-drawerWidth);
+    backdropAnim.setValue(0);
+    setDrawerVisible(true);
+    Animated.parallel([
+      Animated.timing(slideAnim, {
+        toValue: 0,
+        duration: 240,
+        useNativeDriver: true,
+      }),
+      Animated.timing(backdropAnim, {
+        toValue: 1,
+        duration: 240,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const closeDrawer = (onAfterClose?: () => void) => {
+    Animated.parallel([
+      Animated.timing(slideAnim, {
+        toValue: -drawerWidth,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+      Animated.timing(backdropAnim, {
+        toValue: 0,
+        duration: 200,
+        useNativeDriver: true,
+      }),
+    ]).start(({ finished }) => {
+      setDrawerVisible(false);
+      if (finished && onAfterClose) {
+        onAfterClose();
+      }
+    });
+  };
+
+  const navigateFromDrawer = (route: string) => {
+    closeDrawer(() => {
+      router.push(route as never);
+    });
+  };
+
   const visibleMenuItems = useMemo(() => {
     const safeList = Array.isArray(ALL_DASHBOARD_MODULES) ? ALL_DASHBOARD_MODULES : [];
     const idSet = new Set(
@@ -79,8 +132,8 @@ export default function HomeScreen() {
   const performLogout = async () => {
     try {
       setLoggingOut(true);
-      setDrawerVisible(false);
       await signOut(auth);
+      setDrawerVisible(false);
       router.replace('/login');
     } catch (error: any) {
       const message = error?.message || 'Unable to logout.';
@@ -101,9 +154,15 @@ export default function HomeScreen() {
         ? 'আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?'
         : 'Are you sure you want to logout from your account?';
 
+    const runLogoutAfterClose = () => {
+      closeDrawer(() => {
+        performLogout();
+      });
+    };
+
     if (Platform.OS === 'web') {
       if (window.confirm(confirmMsg)) {
-        performLogout();
+        runLogoutAfterClose();
       }
     } else {
       Alert.alert('Logout', confirmMsg, [
@@ -111,7 +170,7 @@ export default function HomeScreen() {
         {
           text: 'Logout',
           style: 'destructive',
-          onPress: performLogout,
+          onPress: runLogoutAfterClose,
         },
       ]);
     }
@@ -124,7 +183,7 @@ export default function HomeScreen() {
       <View style={styles.topBar}>
         <TouchableOpacity
           style={styles.menuTriggerBtn}
-          onPress={() => setDrawerVisible(true)}
+          onPress={openDrawer}
           accessibilityLabel="Open Navigation Drawer"
           activeOpacity={0.75}
         >
@@ -133,18 +192,12 @@ export default function HomeScreen() {
 
         <View style={styles.brandTitleWrap}>
           <Text style={styles.brandTitle}>
-            {lang === 'bn' ? 'আমার বাজেট অ্যাপ' : 'MyBudgetApp'}
+            {lang === 'bn' ? 'আমার বাজেট' : 'My Budget'}
           </Text>
           <Text style={styles.brandSubtitle}>Personal Finance Dashboard</Text>
         </View>
 
-        <TouchableOpacity
-          style={styles.quickSettingsBtn}
-          onPress={() => router.push('/settings' as never)}
-          accessibilityLabel="Settings"
-        >
-          <Ionicons name="settings-outline" size={20} color="#334155" />
-        </TouchableOpacity>
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
@@ -152,18 +205,18 @@ export default function HomeScreen() {
           <View style={styles.heroBadge}>
             <Ionicons name="sparkles" size={13} color="#1D4ED8" />
             <Text style={styles.heroBadgeText}>
-              {lang === 'bn' ? 'স্মার্ট ফিন্যান্স ওয়ার্কস্পেস' : 'Smart Finance Workspace'}
+              {lang === 'bn' ? 'স্মার্ট ফিন্যান্স ওয়ার্কস্পেস' : 'Smart Finance Workspace'}
             </Text>
           </View>
           <Text style={styles.heroHeading}>
             {lang === 'bn'
-              ? 'আয়, বাজেট, সঞ্চয় ও ধারের হিসাব এক জায়গায়'
+              ? 'আয়, বাজেট, সঞ্চয় ও ধারের হিসাব এক জায়গায়'
               : 'Track Income, Budget, Savings & Debts'}
           </Text>
           <Text style={styles.heroDesc}>
             {lang === 'bn'
-              ? 'অতিরিক্ত মডিউল যোগ বা সরাতে Settings ব্যবহার করুন।'
-              : 'Use Settings to add or remove extra dashboard modules.'}
+              ? 'বামের মেনু থেকে Settings খুলে অতিরিক্ত মডিউল যোগ বা সরাতে পারবেন।'
+              : 'Open Settings from the left drawer menu to add or remove extra modules.'}
           </Text>
         </View>
 
@@ -218,11 +271,23 @@ export default function HomeScreen() {
       <Modal
         visible={drawerVisible}
         transparent
-        animationType="fade"
-        onRequestClose={() => setDrawerVisible(false)}
+        animationType="none"
+        onRequestClose={() => closeDrawer()}
       >
         <View style={styles.drawerBackdrop}>
-          <View style={styles.drawerPanel}>
+          <Animated.View style={[styles.drawerScrimLayer, { opacity: backdropAnim }]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => closeDrawer()} />
+          </Animated.View>
+
+          <Animated.View
+            style={[
+              styles.drawerPanel,
+              {
+                width: drawerWidth,
+                transform: [{ translateX: slideAnim }],
+              },
+            ]}
+          >
             <ScrollView
               contentContainerStyle={styles.drawerScrollContent}
               showsVerticalScrollIndicator={false}
@@ -231,7 +296,7 @@ export default function HomeScreen() {
                 <Text style={styles.drawerBrandLabel}>MyBudgetApp</Text>
                 <TouchableOpacity
                   style={styles.drawerCloseBtn}
-                  onPress={() => setDrawerVisible(false)}
+                  onPress={() => closeDrawer()}
                   accessibilityLabel="Close Drawer"
                 >
                   <Ionicons name="close" size={22} color="#334155" />
@@ -248,6 +313,38 @@ export default function HomeScreen() {
                     {userEmail}
                   </Text>
                 </View>
+              </View>
+
+              {/* Drawer Navigation Shortcuts + Settings */}
+              <View style={styles.navSectionBox}>
+                <Text style={styles.infoSectionTitle}>
+                  {lang === 'bn' ? 'নেভিগেশন' : 'Navigation'}
+                </Text>
+
+                {visibleMenuItems.map((item) => (
+                  <TouchableOpacity
+                    key={`drawer-${item.route}`}
+                    style={styles.drawerNavItem}
+                    onPress={() => navigateFromDrawer(item.route)}
+                  >
+                    <Text style={{ fontSize: 17 }}>{item.icon}</Text>
+                    <Text style={styles.drawerNavLabel}>
+                      {lang === 'bn' ? item.titleBn : item.titleEn}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+
+                <View style={styles.drawerDivider} />
+
+                <TouchableOpacity
+                  style={styles.drawerSettingsBtn}
+                  onPress={() => navigateFromDrawer('/settings')}
+                >
+                  <Ionicons name="settings-outline" size={20} color="#1D4ED8" />
+                  <Text style={styles.drawerSettingsText}>
+                    {lang === 'bn' ? 'সেটিংস (Settings)' : 'Settings'}
+                  </Text>
+                </TouchableOpacity>
               </View>
 
               <View style={styles.infoSectionBox}>
@@ -268,7 +365,7 @@ export default function HomeScreen() {
                   </Text>
                   <Text style={styles.aboutParagraph}>
                     {lang === 'bn'
-                      ? 'MyBudgetApp হলো ব্যক্তিগত আয়, মাসিক বাজেট, সঞ্চয়/পলিসি ও দোকানের ধারের হিসাব সহজে গুছিয়ে রাখার একটি স্মার্ট ফিন্যান্স অ্যাপ।'
+                      ? 'MyBudgetApp হলো ব্যক্তিগত আয়, মাসিক বাজেট, সঞ্চয়/পলিসি ও দোকানের ধারের হিসাব সহজে গুছিয়ে রাখার একটি স্মার্ট ফিন্যান্স অ্যাপ।'
                       : 'MyBudgetApp is a personal finance companion designed to track monthly income, budgets, savings plans, and shop debts cleanly.'}
                   </Text>
                 </View>
@@ -307,13 +404,7 @@ export default function HomeScreen() {
                 </Text>
               </TouchableOpacity>
             </ScrollView>
-          </View>
-
-          <TouchableOpacity
-            style={styles.drawerScrimRest}
-            activeOpacity={1}
-            onPress={() => setDrawerVisible(false)}
-          />
+          </Animated.View>
         </View>
       </Modal>
     </SafeAreaView>
@@ -358,14 +449,6 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     color: '#64748B',
     marginTop: 1,
-  },
-  quickSettingsBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   scrollContainer: {
     padding: 16,
@@ -480,24 +563,23 @@ const styles = StyleSheet.create({
   drawerBackdrop: {
     flex: 1,
     flexDirection: 'row',
+  },
+drawerScrimLayer: {
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(15, 23, 42, 0.48)',
   },
   drawerPanel: {
-    width: '82%',
-    maxWidth: 340,
     backgroundColor: '#FFFFFF',
     height: '100%',
     borderTopRightRadius: 20,
     borderBottomRightRadius: 20,
     elevation: 10,
-  },
-  drawerScrimRest: {
-    flex: 1,
+    overflow: 'hidden',
   },
   drawerScrollContent: {
     padding: 18,
     paddingBottom: 28,
-    gap: 16,
+    gap: 14,
   },
   drawerTopHeader: {
     flexDirection: 'row',
@@ -544,6 +626,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#475569',
     marginTop: 2,
+  },
+  navSectionBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 4,
+  },
+  drawerNavItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 8,
+    borderRadius: 10,
+  },
+  drawerNavLabel: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: '#1E293B',
+  },
+  drawerDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 6,
+  },
+  drawerSettingsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: '#EFF6FF',
+  },
+  drawerSettingsText: {
+    fontSize: 13.5,
+    fontWeight: '700',
+    color: '#1D4ED8',
   },
   infoSectionBox: {
     backgroundColor: '#F8FAFC',

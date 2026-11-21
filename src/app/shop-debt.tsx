@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   SafeAreaView,
@@ -15,13 +16,12 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { pushAllLocalToFirebase } from '../utils/firebaseSync';
 import {
   ALL_UNITS,
   DebtLedgerEntry,
   formatBengaliYearMonth,
-  getBudgetShopDebtLink,
   getCurrentYearMonth,
-  getDebtStorageKey,
   getNextYearMonth,
   getPreviousDDMMYYYY,
   getPrevYearMonth,
@@ -34,7 +34,6 @@ import {
   parseDateToYearMonth,
   recordUnitUsage,
   ShopProductCatalogItem,
-  syncDebtToNextMonthBudget,
   upsertProductCatalogItem,
 } from '../utils/shopDebtBudgetSync';
 
@@ -54,11 +53,6 @@ interface DraftBatchItem {
 const SHOPS_LIST_KEY = '@mybudget_debt_shops_v2';
 const BUDGET_MONTH_KEY_PREFIX = '@mybudget_budget_v3_';
 
-const DEFAULT_SHOPS: ShopProfile[] = [
-  { id: 'shop-ab-hakim', name: 'Ab. Hakim' },
-  { id: 'shop-ab-karim', name: 'Ab. Karim' },
-];
-
 function safeToCents(val: unknown): number {
   if (typeof val === 'number') {
     return Number.isFinite(val) ? Math.round(val * 100) : 0;
@@ -76,7 +70,7 @@ function safeFromCents(cents: number): number {
   return Math.round(cents) / 100;
 }
 
-function getContinuousYearMonths(startYM: string, count = 16): string[] {
+function getContinuousYearMonths(startYM: string, count = 12): string[] {
   const list: string[] = [];
   let cursor = startYM;
   for (let i = 0; i < count; i++) {
@@ -87,14 +81,10 @@ function getContinuousYearMonths(startYM: string, count = 16): string[] {
 }
 
 function getShopMonthStorageKey(shopId: string, yearMonth: string): string {
-  if (shopId === 'shop-ab-hakim') {
-    return `@mybudget_shop_debt_v2_hakim_${yearMonth}`;
-  }
   return `@mybudget_shop_debt_v2_${shopId}_${yearMonth}`;
 }
 
 function getBudgetRowIdForShop(shopId: string): string {
-  if (shopId === 'shop-ab-hakim') return 'cat-hakim-debt';
   return `cat-debt-${shopId}`;
 }
 
@@ -125,18 +115,24 @@ export default function ShopDebtScreen() {
   const cardWidth = Math.max(300, Math.min(screenWidth - cardHorizontalMargin * 2, 520));
   const snapInterval = cardWidth + 12;
 
-  const horizontalScrollRef = useRef<ScrollView | null>(null);
+  const horizontalScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
   const initialScrollDoneRef = useRef<boolean>(false);
   const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const systemCurrentYM = getCurrentYearMonth();
 
-  const [shops, setShops] = useState<ShopProfile[]>(DEFAULT_SHOPS);
-  const [selectedShopId, setSelectedShopId] = useState<string>('shop-ab-hakim');
+  // আগে থেকে কোনো ডিফল্ট দোকান থাকবে না; ইউজার + বাটন দিয়ে যোগ করবেন
+  const [shops, setShops] = useState<ShopProfile[]>([]);
+  const [shopsLoaded, setShopsLoaded] = useState<boolean>(false);
+  const [selectedShopId, setSelectedShopId] = useState<string>('');
+
+  // নতুন দোকান যোগ করার Modal
+  const [addShopModalVisible, setAddShopModalVisible] = useState<boolean>(false);
+  const [newShopNameInput, setNewShopNameInput] = useState<string>('');
 
   const [timelineStartYM, setTimelineStartYM] = useState<string>(() => {
     let cursor = systemCurrentYM;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 2; i++) {
       cursor = getPrevYearMonth(cursor);
     }
     return cursor;
@@ -158,7 +154,6 @@ export default function ShopDebtScreen() {
   const [paymentTargetYM, setPaymentTargetYM] = useState<string>(() => systemCurrentYM);
   const [paymentInput, setPaymentInput] = useState<string>('0');
 
-  // Strict Delete Entry স্টেট
   const [pendingDeleteItem, setPendingDeleteItem] = useState<{
     ym: string;
     entry: DebtLedgerEntry;
@@ -170,35 +165,64 @@ export default function ShopDebtScreen() {
     return continuousRecords.map((_, idx) => idx * snapInterval);
   }, [continuousRecords.length, snapInterval]);
 
-  const loadShopsList = useCallback(async () => {
-    try {
-      const raw = await AsyncStorage.getItem(SHOPS_LIST_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as ShopProfile[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setShops(parsed);
-          setSelectedShopId((prevId) =>
-            parsed.some((s) => s.id === prevId) ? prevId : parsed[0].id
-          );
-          return;
+  // পেজ মাউন্ট হলে একবারই দোকানের তালিকা লোড করা (ফ্রিজ হওয়া রোধ করতে)
+  useEffect(() => {
+    let isMounted = true;
+    const initLoad = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(SHOPS_LIST_KEY);
+        if (!isMounted) return;
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            setShops(parsed);
+            if (parsed.length > 0) {
+              setSelectedShopId(parsed[0].id);
+            }
+          }
         }
+      } catch (e) {
+        console.log('Failed to load shops:', e);
+      } finally {
+        if (isMounted) setShopsLoaded(true);
       }
-      await AsyncStorage.setItem(SHOPS_LIST_KEY, JSON.stringify(DEFAULT_SHOPS));
-      setShops(DEFAULT_SHOPS);
-    } catch {
-      // fallback default shops
-    }
+    };
+    initLoad();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  useEffect(() => {
-    loadShopsList();
-  }, [loadShopsList]);
+  const handleCreateNewShop = async () => {
+    const cleanName = newShopNameInput.trim();
+    if (!cleanName) {
+      Alert.alert('দোকানের নাম দিন', 'নতুন দোকানের নাম লিখুন।');
+      return;
+    }
 
-  useFocusEffect(
-    useCallback(() => {
-      loadShopsList();
-    }, [loadShopsList])
-  );
+    const duplicate = shops.some(
+      (s) => s.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (duplicate) {
+      Alert.alert('ইতিমধ্যে আছে', 'এই নামের দোকান ইতিমধ্যে তালিকায় রয়েছে।');
+      return;
+    }
+
+    const newShop: ShopProfile = {
+      id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      name: cleanName,
+    };
+
+    const updated = [...shops, newShop];
+    setShops(updated);
+    setSelectedShopId(newShop.id);
+    initialScrollDoneRef.current = false;
+    setNewShopNameInput('');
+    setAddShopModalVisible(false);
+
+    await AsyncStorage.setItem(SHOPS_LIST_KEY, JSON.stringify(updated));
+    pushAllLocalToFirebase().catch(() => {});
+  };
 
   const getClearedPaymentFromBudgetForShop = useCallback(
     async (shopId: string, ym: string): Promise<number | null> => {
@@ -214,9 +238,7 @@ export default function ShopDebtScreen() {
         const budgetRowId = getBudgetRowIdForShop(shopId);
         if (parsed.rowCleared?.[budgetRowId]) {
           const clearedVal = safeFromCents(safeToCents(parsed.rowAmounts?.[budgetRowId]));
-          if (clearedVal > 0) {
-            return clearedVal;
-          }
+          return clearedVal > 0 ? clearedVal : 0;
         }
         return null;
       } catch {
@@ -227,7 +249,8 @@ export default function ShopDebtScreen() {
   );
 
   const recalculateShopChainFromMonth = useCallback(
-    async (shopId: string, startYM: string, maxSteps = 20): Promise<void> => {
+    async (shopId: string, startYM: string, maxSteps = 14): Promise<void> => {
+      if (!shopId) return;
       let currentYM = startYM;
 
       for (let step = 0; step < maxSteps; step++) {
@@ -240,21 +263,12 @@ export default function ShopDebtScreen() {
           prevCarryoverCents = safeToCents(prevParsed.totalBalanceDue);
         }
 
-        const budgetLink = await getBudgetShopDebtLink(currentYM);
-        if (
-          prevCarryoverCents === 0 &&
-          shopId === 'shop-ab-hakim' &&
-          safeToCents(budgetLink.carryoverDebtFromPrevMonth) > 0
-        ) {
-          prevCarryoverCents = safeToCents(budgetLink.carryoverDebtFromPrevMonth);
-        }
-
         const raw = await AsyncStorage.getItem(getShopMonthStorageKey(shopId, currentYM));
         const parsed: Partial<MonthlyDebtRecord> = raw
           ? (JSON.parse(raw) as Partial<MonthlyDebtRecord>)
           : {};
 
-        const entries: DebtLedgerEntry[] = Array.isArray(parsed.entries)
+        const existingEntries: DebtLedgerEntry[] = Array.isArray(parsed.entries)
           ? parsed.entries.map((e) => {
               const qty = Number(e.quantity) > 0 ? Number(e.quantity) : 1;
               const uPriceCents = safeToCents(e.unitPrice);
@@ -277,23 +291,20 @@ export default function ShopDebtScreen() {
 
         if (budgetClearedPaid !== null && safeToCents(budgetClearedPaid) > 0) {
           paidCents = safeToCents(budgetClearedPaid);
-        } else if (
-          parsed.paidAmount === undefined &&
-          shopId === 'shop-ab-hakim' &&
-          safeToCents(budgetLink.paidAmount) > 0
-        ) {
-          paidCents = safeToCents(budgetLink.paidAmount);
         }
 
         const jerCents = prevCarryoverCents - paidCents;
-        const currentDebtCents = entries.reduce((sum, item) => sum + safeToCents(item.amount), 0);
+        const currentDebtCents = existingEntries.reduce(
+          (sum, item) => sum + safeToCents(item.amount),
+          0
+        );
         const totalDueCents = jerCents + currentDebtCents;
 
         const computed: MonthlyDebtRecord = {
           yearMonth: currentYM,
           prevMonthCarryover: safeFromCents(prevCarryoverCents),
           paidAmount: safeFromCents(paidCents),
-          entries,
+          entries: existingEntries,
           currentMonthDebt: safeFromCents(currentDebtCents),
           totalBalanceDue: safeFromCents(totalDueCents),
           updatedAt: new Date().toISOString(),
@@ -304,11 +315,6 @@ export default function ShopDebtScreen() {
           JSON.stringify(computed)
         );
 
-        if (shopId === 'shop-ab-hakim') {
-          await AsyncStorage.setItem(getDebtStorageKey(currentYM), JSON.stringify(computed));
-          await syncDebtToNextMonthBudget(currentYM, computed.totalBalanceDue);
-        }
-
         currentYM = getNextYearMonth(currentYM);
       }
     },
@@ -316,16 +322,20 @@ export default function ShopDebtScreen() {
   );
 
   const currentShop = useMemo(
-    () => shops.find((s) => s.id === selectedShopId) || shops[0] || DEFAULT_SHOPS[0],
+    () => shops.find((s) => s.id === selectedShopId) || null,
     [shops, selectedShopId]
   );
 
   const loadContinuousStream = useCallback(
     async (shopId: string, startYM: string) => {
+      if (!shopId) {
+        setContinuousRecords([]);
+        return;
+      }
       try {
-        const months = getContinuousYearMonths(startYM, 16);
+        const months = getContinuousYearMonths(startYM, 12);
         const prevYM = getPrevYearMonth(startYM);
-        await recalculateShopChainFromMonth(shopId, prevYM, 18);
+        await recalculateShopChainFromMonth(shopId, prevYM, 14);
 
         const [recordsList, catList, unitsList] = await Promise.all([
           Promise.all(
@@ -360,10 +370,12 @@ export default function ShopDebtScreen() {
   );
 
   useEffect(() => {
-    if (currentShop) {
+    if (currentShop?.id) {
       loadContinuousStream(currentShop.id, timelineStartYM);
+    } else {
+      setContinuousRecords([]);
     }
-  }, [currentShop, timelineStartYM, loadContinuousStream]);
+  }, [currentShop?.id, timelineStartYM, loadContinuousStream]);
 
   const scrollToMonth = useCallback(
     (targetYM: string, animated = true) => {
@@ -439,7 +451,7 @@ export default function ShopDebtScreen() {
       scrollToMonth(nowYM, true);
     } else {
       let start = nowYM;
-      for (let i = 0; i < 3; i++) start = getPrevYearMonth(start);
+      for (let i = 0; i < 2; i++) start = getPrevYearMonth(start);
       initialScrollDoneRef.current = false;
       setTimelineStartYM(start);
       setActiveSlideYM(nowYM);
@@ -459,6 +471,7 @@ export default function ShopDebtScreen() {
   };
 
   const openNewEntryModal = (targetYM?: string) => {
+    if (!currentShop) return;
     const target = targetYM || activeSlideYM || getCurrentYearMonth();
     const [yStr, mStr] = target.split('-');
     const isCurrentMonth = target === getCurrentYearMonth();
@@ -525,6 +538,7 @@ export default function ShopDebtScreen() {
   };
 
   const handleSaveBatchEntries = async () => {
+    if (!currentShop) return;
     const targetYM = parseDateToYearMonth(entryDate);
     if (!targetYM) {
       Alert.alert(
@@ -588,7 +602,8 @@ export default function ShopDebtScreen() {
     setCatalog(latestCatalog);
     setSortedUnits(latestUnits);
 
-    const targetRaw = await AsyncStorage.getItem(getShopMonthStorageKey(currentShop.id, targetYM));
+    const storageKey = getShopMonthStorageKey(currentShop.id, targetYM);
+    const targetRaw = await AsyncStorage.getItem(storageKey);
     const targetParsed: Partial<MonthlyDebtRecord> = targetRaw
       ? (JSON.parse(targetRaw) as Partial<MonthlyDebtRecord>)
       : {};
@@ -607,15 +622,13 @@ export default function ShopDebtScreen() {
       updatedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(
-      getShopMonthStorageKey(currentShop.id, targetYM),
-      JSON.stringify(updatedTarget)
-    );
+    await AsyncStorage.setItem(storageKey, JSON.stringify(updatedTarget));
     setEntryModalVisible(false);
 
     const earliestYM = targetYM < timelineStartYM ? targetYM : timelineStartYM;
-    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 20);
+    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
     await loadContinuousStream(currentShop.id, timelineStartYM);
+    pushAllLocalToFirebase().catch(() => {});
   };
 
   const canConfirmStrictEntryDelete = useMemo(() => {
@@ -626,10 +639,11 @@ export default function ShopDebtScreen() {
   }, [pendingDeleteItem, deleteChecked, deleteTypedConfirm]);
 
   const handleConfirmStrictEntryDelete = async () => {
-    if (!pendingDeleteItem || !canConfirmStrictEntryDelete) return;
+    if (!pendingDeleteItem || !canConfirmStrictEntryDelete || !currentShop) return;
     const { ym, entry } = pendingDeleteItem;
 
-    const raw = await AsyncStorage.getItem(getShopMonthStorageKey(currentShop.id, ym));
+    const storageKey = getShopMonthStorageKey(currentShop.id, ym);
+    const raw = await AsyncStorage.getItem(storageKey);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<MonthlyDebtRecord>;
       const filtered = (Array.isArray(parsed.entries) ? parsed.entries : []).filter(
@@ -646,7 +660,7 @@ export default function ShopDebtScreen() {
         updatedAt: new Date().toISOString(),
       };
 
-      await AsyncStorage.setItem(getShopMonthStorageKey(currentShop.id, ym), JSON.stringify(updated));
+      await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
     }
 
     setPendingDeleteItem(null);
@@ -654,8 +668,9 @@ export default function ShopDebtScreen() {
     setDeleteTypedConfirm('');
 
     const earliestYM = ym < timelineStartYM ? ym : timelineStartYM;
-    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 20);
+    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
     await loadContinuousStream(currentShop.id, timelineStartYM);
+    pushAllLocalToFirebase().catch(() => {});
   };
 
   const openPaymentEditor = (ym: string, currentPaid: number) => {
@@ -665,10 +680,10 @@ export default function ShopDebtScreen() {
   };
 
   const handleSavePayment = async () => {
+    if (!currentShop) return;
     const paidCents = Math.max(0, safeToCents(paymentInput));
-    const raw = await AsyncStorage.getItem(
-      getShopMonthStorageKey(currentShop.id, paymentTargetYM)
-    );
+    const storageKey = getShopMonthStorageKey(currentShop.id, paymentTargetYM);
+    const raw = await AsyncStorage.getItem(storageKey);
     const parsed: Partial<MonthlyDebtRecord> = raw
       ? (JSON.parse(raw) as Partial<MonthlyDebtRecord>)
       : {};
@@ -683,15 +698,13 @@ export default function ShopDebtScreen() {
       updatedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(
-      getShopMonthStorageKey(currentShop.id, paymentTargetYM),
-      JSON.stringify(updated)
-    );
+    await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
     setPaymentModalVisible(false);
 
     const earliestYM = paymentTargetYM < timelineStartYM ? paymentTargetYM : timelineStartYM;
-    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 20);
+    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
     await loadContinuousStream(currentShop.id, timelineStartYM);
+    pushAllLocalToFirebase().catch(() => {});
   };
 
   const activeMonthBengaliLabel = useMemo(
@@ -716,7 +729,6 @@ export default function ShopDebtScreen() {
           isActualCurrentMonth && styles.currentMonthBorder,
         ]}
       >
-        {/* টেবিল/কার্ডের টাইটেল থেকে দোকানের নাম তুলে দিয়ে শুধু মাস ও সাল রাখা হয়েছে */}
         <View style={[styles.monthBanner, isActualCurrentMonth && styles.currentMonthBanner]}>
           <Text style={styles.monthBannerTitle}>
             {formatBengaliYearMonth(record.yearMonth)}
@@ -787,7 +799,7 @@ export default function ShopDebtScreen() {
           <Text style={[styles.detailHeaderCell, { flex: 1, textAlign: 'right' }]}>মূল্য</Text>
         </View>
 
-        <ScrollView style={styles.cardEntriesScroll} nestedScrollEnabled>
+        <ScrollView style={styles.cardEntriesScroll}>
           {record.entries.length === 0 ? (
             <View style={styles.emptyDetailBox}>
               <Text style={styles.emptyDetailText}>কোনো পণ্য এন্ট্রি নেই</Text>
@@ -842,7 +854,6 @@ export default function ShopDebtScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* Top Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
@@ -854,31 +865,35 @@ export default function ShopDebtScreen() {
           </Text>
         </View>
 
-        <TouchableOpacity style={styles.currentMonthBtn} onPress={handleJumpToCurrentMonth}>
-          <Text style={styles.currentMonthBtnText}>Current</Text>
-        </TouchableOpacity>
+        {shops.length > 0 && (
+          <>
+            <TouchableOpacity style={styles.currentMonthBtn} onPress={handleJumpToCurrentMonth}>
+              <Text style={styles.currentMonthBtnText}>Current</Text>
+            </TouchableOpacity>
 
-        <View style={styles.stepNav}>
-          <TouchableOpacity onPress={() => handleSlideByStep(-1)}>
-            <Ionicons name="chevron-back" size={18} color="#2563EB" />
-          </TouchableOpacity>
-          <Text style={styles.stepNavText}>{activeSlideYM}</Text>
-          <TouchableOpacity onPress={() => handleSlideByStep(1)}>
-            <Ionicons name="chevron-forward" size={18} color="#2563EB" />
-          </TouchableOpacity>
-        </View>
+            <View style={styles.stepNav}>
+              <TouchableOpacity onPress={() => handleSlideByStep(-1)}>
+                <Ionicons name="chevron-back" size={18} color="#2563EB" />
+              </TouchableOpacity>
+              <Text style={styles.stepNavText}>{activeSlideYM}</Text>
+              <TouchableOpacity onPress={() => handleSlideByStep(1)}>
+                <Ionicons name="chevron-forward" size={18} color="#2563EB" />
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </View>
 
-      {/* Shop Selector Strip (Add/Delete বাটন সরিয়ে Settings-এ নেওয়া হয়েছে) */}
+      {/* Shop Selector Strip + Add (+) Button */}
       <View style={styles.shopSelectorBar}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 6 }}
+          contentContainerStyle={{ gap: 6, alignItems: 'center' }}
           style={{ flex: 1 }}
         >
           {shops.map((shop) => {
-            const active = shop.id === currentShop.id;
+            const active = currentShop?.id === shop.id;
             return (
               <TouchableOpacity
                 key={shop.id}
@@ -899,6 +914,15 @@ export default function ShopDebtScreen() {
               </TouchableOpacity>
             );
           })}
+
+          <TouchableOpacity
+            style={styles.addShopChipBtn}
+            onPress={() => setAddShopModalVisible(true)}
+            accessibilityLabel="Add new shop"
+          >
+            <Ionicons name="add" size={16} color="#FFFFFF" />
+            <Text style={styles.addShopChipText}>দোকান</Text>
+          </TouchableOpacity>
         </ScrollView>
 
         <TouchableOpacity
@@ -910,101 +934,167 @@ export default function ShopDebtScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Strict Card-Snapped Swipeable Month Cards */}
-      <ScrollView
-        ref={horizontalScrollRef}
-        horizontal
-        snapToOffsets={snapOffsets}
-        snapToAlignment="start"
-        decelerationRate="fast"
-        disableIntervalMomentum={true}
-        scrollEventThrottle={16}
-        showsHorizontalScrollIndicator={false}
-        onScroll={handleHorizontalScroll}
-        onMomentumScrollEnd={handleHorizontalScrollEnd}
-        onScrollEndDrag={handleHorizontalScrollEnd}
-        contentContainerStyle={styles.swipeContainer}
-      >
-        {continuousRecords.map(renderMobileMonthCard)}
-      </ScrollView>
+      {/* Empty State যখন কোনো দোকান যোগ করা হয়নি */}
+      {shopsLoaded && shops.length === 0 ? (
+        <View style={styles.emptyShopContainer}>
+          <View style={styles.emptyShopIconCircle}>
+            <Ionicons name="storefront-outline" size={38} color="#2563EB" />
+          </View>
+          <Text style={styles.emptyShopTitle}>কোনো দোকান যোগ করা নেই</Text>
+          <Text style={styles.emptyShopSub}>
+            বাকির হিসাব শুরু করতে উপরের অথবা নিচের + বাটনে চাপ দিয়ে দোকান তৈরি করুন।
+          </Text>
+          <TouchableOpacity
+            style={styles.emptyShopPrimaryBtn}
+            onPress={() => setAddShopModalVisible(true)}
+          >
+            <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
+            <Text style={styles.emptyShopPrimaryBtnText}>+ দোকান তৈরি করুন</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <ScrollView
+          ref={horizontalScrollRef}
+          horizontal
+          snapToOffsets={snapOffsets}
+          snapToAlignment="start"
+          decelerationRate="fast"
+          disableIntervalMomentum={true}
+          scrollEventThrottle={16}
+          showsHorizontalScrollIndicator={false}
+          onScroll={handleHorizontalScroll}
+          onMomentumScrollEnd={handleHorizontalScrollEnd}
+          onScrollEndDrag={handleHorizontalScrollEnd}
+          contentContainerStyle={styles.swipeContainer}
+        >
+          {continuousRecords.map(renderMobileMonthCard)}
+        </ScrollView>
+      )}
 
-      {/* Strict Delete Entry Modal */}
-      <Modal visible={Boolean(pendingDeleteItem)} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+      {/* Add Shop Modal */}
+      <Modal visible={addShopModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalCard}>
-            <Text style={[styles.modalTitle, { color: '#B91C1C' }]}>
-              কঠিন ডিলিট নিশ্চিতকরণ
-            </Text>
-            {pendingDeleteItem && (
-              <View style={styles.strictBox}>
-                <Text style={{ fontWeight: '700', color: '#991B1B', fontSize: 13 }}>
-                  পণ্য: {pendingDeleteItem.entry.description}
-                </Text>
-                <Text style={{ color: '#7F1D1D', fontSize: 12 }}>
-                  তারিখ: {pendingDeleteItem.entry.date} • মূল্য:{' '}
-                  {formatMoney(pendingDeleteItem.entry.amount)} Tk.
-                </Text>
-              </View>
-            )}
-
-            <TouchableOpacity
-              style={styles.strictCheckRow}
-              onPress={() => setDeleteChecked((v) => !v)}
-            >
-              <Ionicons
-                name={deleteChecked ? 'checkbox' : 'square-outline'}
-                size={22}
-                color="#DC2626"
-              />
-              <Text style={styles.strictCheckText}>
-                আমি নিশ্চিত যে এই এন্ট্রিটি স্থায়ীভাবে মুছে ফেলতে চাই।
-              </Text>
-            </TouchableOpacity>
-
-            <Text style={styles.inputLabel}>
-              নিশ্চিত করতে "DELETE" অথবা পণ্যের নাম লিখুন:
-            </Text>
+            <Text style={styles.modalTitle}>নতুন দোকান তৈরি করুন</Text>
+            <Text style={styles.inputLabel}>দোকানের নাম লিখুন</Text>
             <TextInput
               style={styles.modalInput}
-              placeholder='Type "DELETE" to confirm'
-              value={deleteTypedConfirm}
-              onChangeText={setDeleteTypedConfirm}
+              placeholder="যেমন: Ab. Hakim, Ab. Karim"
+              value={newShopNameInput}
+              onChangeText={setNewShopNameInput}
+              autoFocus
             />
-
             <View style={styles.modalButtons}>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
-                onPress={() => {
-                  setPendingDeleteItem(null);
-                  setDeleteChecked(false);
-                  setDeleteTypedConfirm('');
-                }}
+                onPress={() => setAddShopModalVisible(false)}
               >
                 <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
               </TouchableOpacity>
-
               <TouchableOpacity
-                disabled={!canConfirmStrictEntryDelete}
-                style={[
-                  styles.modalBtn,
-                  {
-                    backgroundColor: canConfirmStrictEntryDelete ? '#DC2626' : '#FCA5A5',
-                  },
-                ]}
-                onPress={handleConfirmStrictEntryDelete}
+                style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
+                onPress={handleCreateNewShop}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>ডিলিট করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>তৈরি করুন</Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Strict Delete Entry Modal */}
+      <Modal visible={Boolean(pendingDeleteItem)} transparent animationType="fade">
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <ScrollView
+            contentContainerStyle={styles.modalScrollCenter}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.modalCard}>
+              <Text style={[styles.modalTitle, { color: '#B91C1C' }]}>
+                কঠিন ডিলিট নিশ্চিতকরণ
+              </Text>
+              {pendingDeleteItem && (
+                <View style={styles.strictBox}>
+                  <Text style={{ fontWeight: '700', color: '#991B1B', fontSize: 13 }}>
+                    পণ্য: {pendingDeleteItem.entry.description}
+                  </Text>
+                  <Text style={{ color: '#7F1D1D', fontSize: 12 }}>
+                    তারিখ: {pendingDeleteItem.entry.date} • মূল্য:{' '}
+                    {formatMoney(pendingDeleteItem.entry.amount)} Tk.
+                  </Text>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={styles.strictCheckRow}
+                onPress={() => setDeleteChecked((v) => !v)}
+              >
+                <Ionicons
+                  name={deleteChecked ? 'checkbox' : 'square-outline'}
+                  size={22}
+                  color="#DC2626"
+                />
+                <Text style={styles.strictCheckText}>
+                  আমি নিশ্চিত যে এই এন্ট্রিটি স্থায়ীভাবে মুছে ফেলতে চাই।
+                </Text>
+              </TouchableOpacity>
+
+              <Text style={styles.inputLabel}>
+                নিশ্চিত করতে "DELETE" অথবা পণ্যের নাম লিখুন:
+              </Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder='Type "DELETE" to confirm'
+                value={deleteTypedConfirm}
+                onChangeText={setDeleteTypedConfirm}
+              />
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                  onPress={() => {
+                    setPendingDeleteItem(null);
+                    setDeleteChecked(false);
+                    setDeleteTypedConfirm('');
+                  }}
+                >
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  disabled={!canConfirmStrictEntryDelete}
+                  style={[
+                    styles.modalBtn,
+                    {
+                      backgroundColor: canConfirmStrictEntryDelete ? '#DC2626' : '#FCA5A5',
+                    },
+                  ]}
+                  onPress={handleConfirmStrictEntryDelete}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>ডিলিট করুন</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Inline Multi-Row Add Modal */}
       <Modal visible={entryModalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>ধারের পণ্য এন্ট্রি — {currentShop.name}</Text>
+            <Text style={styles.modalTitle}>
+              ধারের পণ্য এন্ট্রি — {currentShop?.name || ''}
+            </Text>
 
             <Text style={styles.inputLabel}>তারিখ (বাম পাশের &lt; চাপলে আগের তারিখ আসবে)</Text>
             <View style={styles.dateRow}>
@@ -1032,7 +1122,10 @@ export default function ShopDebtScreen() {
               <View style={{ width: 32 }} />
             </View>
 
-            <ScrollView style={{ maxHeight: 320, marginTop: 6, marginBottom: 8 }}>
+            <ScrollView
+              style={{ maxHeight: 300, marginTop: 6, marginBottom: 8 }}
+              keyboardShouldPersistTaps="handled"
+            >
               {draftItems.map((draft, index) => {
                 const qNum = parseFloat(draft.quantityText.replace(/[^0-9.]/g, '')) || 0;
                 const rowAmt = safeFromCents(
@@ -1046,7 +1139,7 @@ export default function ShopDebtScreen() {
                   activeSuggestionRow === index
                     ? catalog
                         .filter((c) => (!query ? true : c.name.toLowerCase().includes(query)))
-                        .slice(0, 5)
+                        .slice(0, 6)
                     : [];
 
                 return (
@@ -1140,14 +1233,19 @@ export default function ShopDebtScreen() {
                         {suggestions.map((prod) => (
                           <TouchableOpacity
                             key={prod.id}
+                            activeOpacity={0.65}
                             style={styles.suggestionItem}
                             onPress={() => handleApplyCatalogSuggestion(index, prod)}
                           >
-                            <Text style={styles.suggestionName}>{prod.name}</Text>
-                            <Text style={styles.suggestionMeta}>
-                              {formatMoney(prod.defaultUnitPrice)} / {prod.defaultQuantity}{' '}
-                              {prod.defaultUnit}
-                            </Text>
+                            <View pointerEvents="none" style={{ flex: 1, paddingRight: 8 }}>
+                              <Text style={styles.suggestionName}>{prod.name}</Text>
+                            </View>
+                            <View pointerEvents="none">
+                              <Text style={styles.suggestionMeta}>
+                                {formatMoney(prod.defaultUnitPrice)} / {prod.defaultQuantity}{' '}
+                                {prod.defaultUnit}
+                              </Text>
+                            </View>
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -1187,15 +1285,18 @@ export default function ShopDebtScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Payment Edit Modal */}
       <Modal visible={paymentModalVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
-              প্রদান (Payment) — {currentShop.name} ({paymentTargetYM})
+              প্রদান (Payment) — {currentShop?.name || ''} ({paymentTargetYM})
             </Text>
             <Text style={styles.inputLabel}>প্রদত্ত টাকার পরিমাণ (Tk.)</Text>
             <TextInput
@@ -1221,7 +1322,7 @@ export default function ShopDebtScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
@@ -1313,12 +1414,68 @@ const styles = StyleSheet.create({
   shopChipTextActive: {
     color: '#FFFFFF',
   },
+  addShopChipBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#16A34A',
+  },
+  addShopChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
   settingsShortcutBtn: {
     padding: 6,
     borderRadius: 8,
     backgroundColor: '#F1F5F9',
     borderWidth: 1,
     borderColor: '#CBD5E1',
+  },
+  emptyShopContainer: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 28,
+    gap: 10,
+  },
+  emptyShopIconCircle: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#DBEAFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
+  },
+  emptyShopTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  emptyShopSub: {
+    fontSize: 13,
+    color: '#64748B',
+    textAlign: 'center',
+    lineHeight: 19,
+  },
+  emptyShopPrimaryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 18,
+    paddingVertical: 11,
+    borderRadius: 10,
+    marginTop: 6,
+  },
+  emptyShopPrimaryBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 14,
   },
   swipeContainer: {
     padding: 10,
@@ -1436,6 +1593,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15, 23, 42, 0.5)',
     justifyContent: 'center',
     padding: 14,
+  },
+  modalScrollCenter: {
+    flexGrow: 1,
+    justifyContent: 'center',
   },
   modalCard: {
     backgroundColor: '#FFFFFF',
@@ -1614,18 +1775,19 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingVertical: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#DBEAFE',
   },
   suggestionName: {
-    fontSize: 12,
+    fontSize: 12.5,
     fontWeight: '700',
     color: '#1E3A8A',
   },
   suggestionMeta: {
-    fontSize: 10.5,
+    fontSize: 11,
     color: '#2563EB',
+    fontWeight: '600',
   },
   rowFooterMeta: {
     flexDirection: 'row',

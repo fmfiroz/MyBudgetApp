@@ -449,7 +449,7 @@ export default function BudgetScreen() {
     return offsets;
   }, [monthColWidth, visibleColumnsCount]);
 
-  const monthScrollRef = useRef<ScrollView | null>(null);
+  const monthScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
   const initialScrollDoneRef = useRef<boolean>(false);
   const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeGridIndex, setActiveGridIndex] = useState<number>(0);

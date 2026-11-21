@@ -24,6 +24,15 @@ export default function RootLayout() {
           <Stack.Screen name="forgot-password" options={{ headerShown: false }} />
           <Stack.Screen name="dashboard" options={{ headerShown: false }} />
           <Stack.Screen name="explore" options={{ headerShown: false }} />
+          <Stack.Screen name="budget" options={{ headerShown: false }} />
+          <Stack.Screen name="shop-debt" options={{ headerShown: false }} />
+          <Stack.Screen name="social-religious" options={{ headerShown: false }} />
+          <Stack.Screen name="welfare" options={{ headerShown: false }} />
+          <Stack.Screen name="savings" options={{ headerShown: false }} />
+          <Stack.Screen name="income" options={{ headerShown: false }} />
+          <Stack.Screen name="bike-expense" options={{ headerShown: false }} />
+          <Stack.Screen name="reports" options={{ headerShown: false }} />
+          <Stack.Screen name="settings" options={{ headerShown: false }} />
         </Stack>
       </View>
     </ThemeProvider>

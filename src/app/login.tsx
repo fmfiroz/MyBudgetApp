@@ -1,18 +1,22 @@
-
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { Link, useRouter } from 'expo-router';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  GoogleAuthProvider,
+  signInWithCredential,
+  signInWithEmailAndPassword,
+} from 'firebase/auth';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { auth } from '../firebase';
 
@@ -22,6 +26,13 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    GoogleSignin.configure({
+      // Firebase Console -> Authentication -> Sign-in method -> Google থেকে পাওয়া Web client ID দিন
+      webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+    });
+  }, []);
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -46,6 +57,30 @@ export default function LoginScreen() {
       Alert.alert(
         'Login Failed',
         messages[error.code] || error.message || 'Unable to login.'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleGoogleLogin = async () => {
+    setLoading(true);
+    try {
+      await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      const signInResult = await GoogleSignin.signIn();
+      const idToken = signInResult.data?.idToken ?? (signInResult as any).idToken;
+
+      if (!idToken) {
+        throw new Error('No Google ID token received.');
+      }
+
+      const googleCredential = GoogleAuthProvider.credential(idToken);
+      await signInWithCredential(auth, googleCredential);
+      router.replace('/dashboard');
+    } catch (error: any) {
+      Alert.alert(
+        'Google Login Failed',
+        error?.message || 'Unable to sign in with Google.'
       );
     } finally {
       setLoading(false);
@@ -121,6 +156,20 @@ export default function LoginScreen() {
             )}
           </TouchableOpacity>
 
+          <View style={styles.dividerRow}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>OR</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          <TouchableOpacity
+            style={[styles.googleButton, loading && styles.disabledButton]}
+            onPress={handleGoogleLogin}
+            disabled={loading}
+          >
+            <Text style={styles.googleButtonText}>Continue with Google</Text>
+          </TouchableOpacity>
+
           <View style={styles.signupRow}>
             <Text style={styles.normalText}>Don't have an account? </Text>
             <Link href="/register" style={styles.link}>Sign Up</Link>
@@ -164,6 +213,22 @@ const styles = StyleSheet.create({
   button: {
     height: 54, borderRadius: 12, backgroundColor: '#2563EB',
     alignItems: 'center', justifyContent: 'center',
+  },
+  dividerRow: {
+    flexDirection: 'row', alignItems: 'center', marginVertical: 18,
+  },
+  dividerLine: {
+    flex: 1, height: 1, backgroundColor: '#E2E8F0',
+  },
+  dividerText: {
+    marginHorizontal: 12, color: '#64748B', fontSize: 13, fontWeight: '600',
+  },
+  googleButton: {
+    height: 52, borderRadius: 12, borderWidth: 1, borderColor: '#CBD5E1',
+    backgroundColor: '#FFFFFF', alignItems: 'center', justifyContent: 'center',
+  },
+  googleButtonText: {
+    color: '#172554', fontSize: 16, fontWeight: '700',
   },
   disabledButton: { opacity: 0.6 },
   buttonText: { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold' },

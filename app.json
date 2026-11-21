@@ -29,6 +29,7 @@
     },
     "plugins": [
       "expo-router",
+      "@react-native-google-signin/google-signin",
       [
         "expo-splash-screen",
         {
@@ -39,13 +40,21 @@
       ],
       "@react-native-community/datetimepicker",
       "expo-sqlite",
-      "expo-web-browser",
-      "@react-native-google-signin/google-signin",
-      "expo-sharing"
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "001cb40e-80a6-4f6d-b135-f7b82d94222a"
+      }
     }
   }
 }

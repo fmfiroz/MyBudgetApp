@@ -1,117 +1,117 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useFocusEffect, useRouter } from 'expo-router';
+
+import { useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
-import { useCallback, useState } from 'react';
-import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useState } from 'react';
+import {
+  Alert, Platform, ScrollView, StyleSheet, Text,
+  TouchableOpacity, View
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth } from '../firebase';
 
+const menuItems = [
+  { title: 'Budget', icon: '📊', route: '/budget', color: '#2563eb' },
+  { title: 'Shop Debt', icon: '📒', route: '/shop-debt', color: '#0891b2' },
+  { title: 'Social & Religious Activity', icon: '🤝', route: '/social-religious', color: '#7c3aed' },
+  { title: 'Welfare', icon: '❤️', route: '/welfare', color: '#db2777' },
+  { title: 'Savings', icon: '🏦', route: '/savings', color: '#059669' },
+  { title: 'Income', icon: '💰', route: '/income', color: '#16a34a' },
+  { title: 'Bike Expense', icon: '🏍️', route: '/bike-expense', color: '#ea580c' },
+  { title: 'Reports', icon: '📈', route: '/reports', color: '#4f46e5' },
+  { title: 'Settings', icon: '⚙️', route: '/settings', color: '#64748b' },
+];
+
 export default function HomeScreen() {
   const router = useRouter();
-  const [totalExpense, setTotalExpense] = useState(0);
-  const [totalIncome, setTotalIncome] = useState(0);
   const [loggingOut, setLoggingOut] = useState(false);
 
-  const loadDashboardData = async () => {
+  const performLogout = async () => {
     try {
-      const existingData = await AsyncStorage.getItem('@local_expense_db');
-      if (existingData) {
-        const expenses = JSON.parse(existingData);
-        const sum = expenses.reduce(
-          (acc: number, item: any) => acc + (Number(item.amount) || 0), 0
-        );
-        setTotalExpense(sum);
+      setLoggingOut(true);
+      await signOut(auth);
+      router.replace('/login');
+    } catch (error: any) {
+      const message = error.message || 'Unable to logout.';
+      if (Platform.OS === 'web') {
+        window.alert(message);
       } else {
-        setTotalExpense(0);
+        Alert.alert('Logout Failed', message);
       }
-    } catch (error) {
-      console.log('Error loading dashboard data', error);
+      setLoggingOut(false);
     }
   };
 
-  useFocusEffect(
-    useCallback(() => {
-      loadDashboardData();
-    }, [])
-  );
-
   const handleLogout = () => {
-    Alert.alert(
-      'Logout',
-      'আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setLoggingOut(true);
-              await signOut(auth);
-              router.replace('/login');
-            } catch (error: any) {
-              Alert.alert('Logout Failed', error.message || 'Unable to logout.');
-            } finally {
-              setLoggingOut(false);
-            }
-          },
-        },
-      ]
-    );
-  };
+    if (loggingOut) return;
 
-  const currentBalance = totalIncome - totalExpense;
+    if (Platform.OS === 'web') {
+      if (window.confirm('আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?')) {
+        performLogout();
+      }
+    } else {
+      Alert.alert(
+        'Logout',
+        'আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Logout',
+            style: 'destructive',
+            onPress: performLogout,
+          },
+        ]
+      );
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView contentContainerStyle={styles.scrollContainer}>
         <View style={styles.header}>
           <Text style={styles.headerTitle}>আমার বাজেট অ্যাপ</Text>
-          <Text style={styles.headerSubtitle}>নভেম্বর ২০২৬ (অটো-রিফ্রেশ লোকাল-ফার্স্ট)</Text>
-          <Text style={styles.userEmail}>{auth.currentUser?.email || ''}</Text>
+          <Text style={styles.headerSubtitle}>
+            Personal Finance Management
+          </Text>
+          <Text style={styles.userEmail}>
+            {auth.currentUser?.email || ''}
+          </Text>
+
           <TouchableOpacity
-  style={styles.logoutButton}
-  onPress={() => {
-    console.log('Logout button pressed');
-    handleLogout();
-  }}
-  disabled={false}
->
+            style={styles.logoutButton}
+            onPress={handleLogout}
+            disabled={loggingOut}
+          >
             <Text style={styles.logoutText}>
               {loggingOut ? 'Logging out...' : 'Logout'}
             </Text>
           </TouchableOpacity>
         </View>
 
-        <View style={styles.cardRow}>
-          <View style={[styles.card, styles.incomeCard]}>
-            <Text style={styles.cardTitle}>মোট আয়</Text>
-            <Text style={styles.cardAmount}>৳ {totalIncome.toLocaleString()}</Text>
-          </View>
-          <View style={[styles.card, styles.expenseCard]}>
-            <Text style={styles.cardTitle}>মোট খরচ</Text>
-            <Text style={styles.cardAmount}>৳ {totalExpense.toLocaleString()}</Text>
-          </View>
-        </View>
-
-        <View style={styles.balanceCard}>
-          <Text style={styles.balanceTitle}>বর্তমান স্থিতি (Balance)</Text>
-          <Text style={styles.balanceAmount}>৳ {currentBalance.toLocaleString()}</Text>
-        </View>
-
         <View style={styles.sectionContainer}>
           <Text style={styles.sectionTitle}>হিসাবের মডিউলসমূহ</Text>
-          <View style={styles.moduleBox}>
-            <TouchableOpacity onPress={() => router.push('/expense' as never)}>
-              <Text style={styles.moduleText}>📌 দৈনিক বাজার ও খরচ (Market Expense)</Text>
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => router.push('/annual-budget' as never)}>
-              <Text style={styles.moduleText}>📌 ১২ মাসের বাজেট ও ট্র্যাকিং (Annual Budget)</Text>
-            </TouchableOpacity>
-            <Text style={styles.moduleText}>📌 ধার ও বাকি খাতা (Dhar Ledger)</Text>
-            <Text style={styles.moduleText}>📌 কল্যাণ তহবিল (Welfare Fund)</Text>
-            <Text style={styles.moduleText}>📌 স্থায়ী খরচ ও ডিপিএস (Fixed Savings)</Text>
-            <Text style={styles.moduleText}>📌 বাইকের ফুয়েল ট্র্যাকিং (Vehicle Log)</Text>
+
+          <View style={styles.menuGrid}>
+            {menuItems.map((item) => (
+              <TouchableOpacity
+                key={item.route}
+                style={styles.menuCard}
+                activeOpacity={0.75}
+                onPress={() => router.push(item.route as never)}
+              >
+                <View style={[
+                  styles.iconContainer,
+                  { backgroundColor: item.color + '18' }
+                ]}>
+                  <Text style={styles.menuIcon}>{item.icon}</Text>
+                </View>
+
+                <Text style={styles.menuTitle}>
+                  {item.title}
+                </Text>
+
+                <Text style={styles.menuArrow}>›</Text>
+              </TouchableOpacity>
+            ))}
           </View>
         </View>
       </ScrollView>
@@ -120,34 +120,95 @@ export default function HomeScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#f5f6fa' },
-  scrollContainer: { padding: 20 },
-  header: { marginBottom: 20, alignItems: 'center' },
-  headerTitle: { fontSize: 24, fontWeight: 'bold', color: '#2f3640' },
-  headerSubtitle: { fontSize: 14, color: '#718093', marginTop: 4 },
-  userEmail: { fontSize: 13, color: '#718093', marginTop: 8 },
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f6fa',
+  },
+  scrollContainer: {
+    padding: 18,
+    paddingBottom: 30,
+  },
+  header: {
+    backgroundColor: '#ffffff',
+    padding: 20,
+    borderRadius: 16,
+    alignItems: 'center',
+    marginBottom: 24,
+    elevation: 2,
+  },
+  headerTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#1e293b',
+  },
+  headerSubtitle: {
+    fontSize: 13,
+    color: '#718093',
+    marginTop: 5,
+  },
+  userEmail: {
+    fontSize: 13,
+    color: '#64748b',
+    marginTop: 9,
+  },
   logoutButton: {
-    marginTop: 12, backgroundColor: '#fee2e2',
-    paddingHorizontal: 20, paddingVertical: 9, borderRadius: 8,
+    marginTop: 14,
+    backgroundColor: '#fee2e2',
+    paddingHorizontal: 24,
+    paddingVertical: 9,
+    borderRadius: 8,
   },
-  logoutText: { color: '#dc2626', fontWeight: 'bold' },
-  cardRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
-  card: { flex: 1, padding: 20, borderRadius: 12, marginHorizontal: 5, elevation: 3 },
-  incomeCard: { backgroundColor: '#4cd137' },
-  expenseCard: { backgroundColor: '#e84118' },
-  cardTitle: { color: '#fff', fontSize: 14, marginBottom: 8 },
-  cardAmount: { color: '#fff', fontSize: 20, fontWeight: 'bold' },
-  balanceCard: {
-    backgroundColor: '#00a8ff', padding: 20, borderRadius: 12,
-    alignItems: 'center', marginBottom: 20, elevation: 3,
+  logoutText: {
+    color: '#dc2626',
+    fontWeight: 'bold',
   },
-  balanceTitle: { color: '#fff', fontSize: 16, marginBottom: 8 },
-  balanceAmount: { color: '#fff', fontSize: 28, fontWeight: 'bold' },
-  sectionContainer: { marginTop: 10 },
-  sectionTitle: { fontSize: 18, fontWeight: 'bold', color: '#2f3640', marginBottom: 10 },
-  moduleBox: { backgroundColor: '#fff', padding: 15, borderRadius: 12, elevation: 2 },
-  moduleText: {
-    fontSize: 16, color: '#353b48', paddingVertical: 10,
-    borderBottomWidth: 1, borderBottomColor: '#f1f2f6',
+  sectionContainer: {
+    marginTop: 2,
+  },
+  sectionTitle: {
+    fontSize: 19,
+    fontWeight: 'bold',
+    color: '#1e293b',
+    marginBottom: 14,
+  },
+  menuGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  menuCard: {
+    width: '48%',
+    minHeight: 135,
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 14,
+    justifyContent: 'center',
+    elevation: 2,
+    position: 'relative',
+  },
+  iconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  menuIcon: {
+    fontSize: 27,
+  },
+  menuTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#334155',
+    paddingRight: 5,
+  },
+  menuArrow: {
+    position: 'absolute',
+    right: 12,
+    top: 12,
+    fontSize: 23,
+    color: '#94a3b8',
   },
 });

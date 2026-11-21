@@ -221,7 +221,7 @@ export default function SettingsScreen() {
     await saveToLocalFirst(SHOPS_LIST_KEY, updated);
   };
 
-  const canConfirmStrictShopDelete = useMemo(() => {
+const canConfirmStrictShopDelete = useMemo(() => {
     if (!deleteTargetShop || !deleteShopChecked) return false;
     const typed = deleteShopTypedConfirm.trim().toLowerCase();
     const targetName = deleteTargetShop.name.trim().toLowerCase();

@@ -1,29 +1,1303 @@
-
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Alert,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
+} from 'react-native';
 
-export default function WelfareScreen() {
+export type SavingsCategoryType = 'Insurance' | 'DPS' | 'Others';
+
+const FISCAL_MONTHS = [
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+];
+
+const MONTH_NAME_TO_NUM: Record<string, string> = {
+  January: '01',
+  February: '02',
+  March: '03',
+  April: '04',
+  May: '05',
+  June: '06',
+  July: '07',
+  August: '08',
+  September: '09',
+  October: '10',
+  November: '11',
+  December: '12',
+};
+
+interface SavingsPlanItem {
+  id: string;
+  type: SavingsCategoryType;
+  name: string; // Savings / Policy / Scheme Name
+  companyName?: string; // Optional Company Name
+  policyNo?: string; // Policy No.
+  amount: number; // মাসিক কিস্তি / সেভিংস পরিমাণ
+  startFiscalYear: number;
+  startMonthIndex: number; // 0..11 within FISCAL_MONTHS
+  durationMonths: number; // মেয়াদ (মাস সংখ্যা)
+}
+
+const SAVINGS_ITEMS_KEY = '@mybudget_savings_plans_v1';
+const SAVINGS_MONTH_KEY_PREFIX = '@mybudget_savings_monthly_v1_';
+
+function safeToCents(val: unknown): number {
+  if (typeof val === 'number') {
+    return Number.isFinite(val) ? Math.round(val * 100) : 0;
+  }
+  if (typeof val === 'string') {
+    const cleaned = val.replace(/[^0-9.-]/g, '');
+    if (!cleaned || cleaned === '-' || cleaned === '.') return 0;
+    const parsed = Number(cleaned);
+    return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
+  }
+  return 0;
+}
+
+function safeFromCents(cents: number): number {
+  return Math.round(cents) / 100;
+}
+
+function formatMoney(val: number): string {
+  const num = Number.isFinite(val) ? val : 0;
+  return num.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatFiscalYearLabel(startYear: number): string {
+  const nextTwoDigits = String((startYear + 1) % 100).padStart(2, '0');
+  return `${startYear}-${nextTwoDigits}`;
+}
+
+function getMonthCalendarYear(month: string, startYear: number): number {
+  const idx = FISCAL_MONTHS.indexOf(month);
+  return idx >= 0 && idx <= 5 ? startYear : startYear + 1;
+}
+
+function getYearMonthForFiscalMonth(month: string, startYear: number): string {
+  const calYear = getMonthCalendarYear(month, startYear);
+  const mm = MONTH_NAME_TO_NUM[month] || '01';
+  return `${calYear}-${mm}`;
+}
+
+function getCurrentFiscalMonthName(): string {
+  const jsMonth = new Date().getMonth();
+  const names = [
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
+  ];
+  return names[jsMonth] || 'November';
+}
+
+function getItemStateForMonth(
+  item: SavingsPlanItem,
+  targetFiscalYear: number,
+  targetMonthIndex: number
+): { activeAmount: number; isWithinMeyad: boolean; isExpiredByNow: boolean } {
+  const duration = Math.max(1, Math.floor(Number(item.durationMonths) || 1));
+
+  const now = new Date();
+  const nowStartYear = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+  const nowMonthName = getCurrentFiscalMonthName();
+  const nowMonthIdx = Math.max(0, FISCAL_MONTHS.indexOf(nowMonthName));
+
+  const itemStartAbs = item.startFiscalYear * 12 + item.startMonthIndex;
+  const itemEndAbsExclusive = itemStartAbs + duration;
+  const nowAbs = nowStartYear * 12 + nowMonthIdx;
+  const isExpiredByNow = nowAbs >= itemEndAbsExclusive;
+
+  const targetAbs = targetFiscalYear * 12 + targetMonthIndex;
+  const isWithinMeyad = targetAbs >= itemStartAbs && targetAbs < itemEndAbsExclusive;
+
+  const amtCents = safeToCents(item.amount);
+  return {
+    activeAmount: isWithinMeyad ? safeFromCents(amtCents) : 0,
+    isWithinMeyad,
+    isExpiredByNow,
+  };
+}
+
+async function getIncomeNetBalanceForMonth(
+  month: string,
+  fiscalStartYear: number
+): Promise<number> {
+  try {
+    const raw = await AsyncStorage.getItem(
+      `@income_fy_${fiscalStartYear}_${fiscalStartYear + 1}`
+    );
+    if (!raw) return 0;
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return 0;
+
+    let basicCents = 0;
+    const basicRow = (parsed as any[]).find(
+      (r) =>
+        r &&
+        !r.hidden &&
+        (r.isBasic || String(r.description || '').trim().toLowerCase() === 'net basic')
+    );
+    if (basicRow?.cells?.[month]) {
+      basicCents = safeToCents(basicRow.cells[month].value);
+    }
+
+    let incomeCents = 0;
+    let deductionCents = 0;
+
+    (parsed as any[]).forEach((row) => {
+      if (!row || row.hidden) return;
+      const cell = row.cells?.[month];
+      if (!cell) return;
+      const val = Number(cell.value) || 0;
+      if (val === 0) return;
+
+      const amtCents =
+        cell.mode === 'percent' ? Math.round((basicCents * val) / 100) : safeToCents(val);
+
+      if (row.type === 'deduction') {
+        deductionCents += amtCents;
+      } else {
+        incomeCents += amtCents;
+      }
+    });
+
+    return safeFromCents(incomeCents - deductionCents);
+  } catch {
+    return 0;
+  }
+}
+
+export default function SavingsScreen() {
   const router = useRouter();
+  const { width: screenWidth } = useWindowDimensions();
+
+  const isMobileScreen = screenWidth < 768;
+  const visibleColumnsCount = isMobileScreen
+    ? 2
+    : Math.max(4, Math.floor((screenWidth - 215) / 114));
+  const rawRightWidth = Math.max(200, Math.floor(screenWidth - (isMobileScreen ? 136 : 215)));
+  const monthColWidth = Math.floor(rawRightWidth / visibleColumnsCount);
+  const exactRightViewportWidth = monthColWidth * visibleColumnsCount;
+  const descColWidth = Math.max(138, Math.floor(screenWidth) - exactRightViewportWidth);
+
+  const gridSnapOffsets = useMemo(() => {
+    const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+    const offsets: number[] = [];
+    for (let i = 0; i <= maxStartIndex; i++) {
+      offsets.push(i * monthColWidth);
+    }
+    return offsets;
+  }, [monthColWidth, visibleColumnsCount]);
+
+  const monthScrollRef = useRef<ScrollView | null>(null);
+  const initialScrollDoneRef = useRef<boolean>(false);
+  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [activeGridIndex, setActiveGridIndex] = useState<number>(0);
+
+  const getInitialFiscalStartYear = () => {
+    const now = new Date();
+    return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+  };
+
+  const [fiscalStartYear, setFiscalStartYear] = useState<number>(getInitialFiscalStartYear);
+  const [plans, setPlans] = useState<SavingsPlanItem[]>([]);
+  const [incomeNetByMonth, setIncomeNetByMonth] = useState<{ [month: string]: number }>(() => {
+    const obj: { [month: string]: number } = {};
+    FISCAL_MONTHS.forEach((m) => {
+      obj[m] = 0;
+    });
+    return obj;
+  });
+
+  // Add Savings Modal স্টেট: Name -> Company Name (optional) -> Policy No. -> Amount
+  const [addModalVisible, setAddModalVisible] = useState<boolean>(false);
+  const [selectedType, setSelectedType] = useState<SavingsCategoryType>('Insurance');
+  const [itemName, setItemName] = useState<string>('');
+  const [companyNameInput, setCompanyNameInput] = useState<string>('');
+  const [policyNoInput, setPolicyNoInput] = useState<string>('');
+  const [amountInput, setAmountInput] = useState<string>('');
+  const [meyadMonthsInput, setMeyadMonthsInput] = useState<string>('12');
+  const [startMonthName, setStartMonthName] = useState<string>(() =>
+    getCurrentFiscalMonthName()
+  );
+
+  // Strict Delete Confirmation Modal স্টেট (সহজে ডিলিট হবে না)
+  const [deleteTargetPlan, setDeleteTargetPlan] = useState<SavingsPlanItem | null>(null);
+  const [deleteCheckboxChecked, setDeleteCheckboxChecked] = useState<boolean>(false);
+  const [deleteConfirmTypedText, setDeleteConfirmTypedText] = useState<string>('');
+
+  const fiscalLabel = formatFiscalYearLabel(fiscalStartYear);
+
+  const syncMonthlySavingsToBudget = useCallback(
+    async (startYr: number, planList: SavingsPlanItem[]) => {
+      for (let mIdx = 0; mIdx < FISCAL_MONTHS.length; mIdx++) {
+        const month = FISCAL_MONTHS[mIdx];
+        const ym = getYearMonthForFiscalMonth(month, startYr);
+
+        const totalCents = planList.reduce((sumCents, item) => {
+          const st = getItemStateForMonth(item, startYr, mIdx);
+          return sumCents + safeToCents(st.activeAmount);
+        }, 0);
+
+        await AsyncStorage.setItem(
+          `${SAVINGS_MONTH_KEY_PREFIX}${ym}`,
+          JSON.stringify({
+            yearMonth: ym,
+            totalSavings: safeFromCents(totalCents),
+            updatedAt: new Date().toISOString(),
+          })
+        );
+      }
+    },
+    []
+  );
+
+  const loadSavingsData = useCallback(
+    async (startYr: number) => {
+      try {
+        const rawPlans = await AsyncStorage.getItem(SAVINGS_ITEMS_KEY);
+        const parsedPlans: SavingsPlanItem[] = rawPlans
+          ? (JSON.parse(rawPlans) as SavingsPlanItem[])
+          : [];
+        const validPlans = Array.isArray(parsedPlans) ? parsedPlans : [];
+        setPlans(validPlans);
+
+        const netMap: { [month: string]: number } = {};
+        for (const month of FISCAL_MONTHS) {
+          netMap[month] = await getIncomeNetBalanceForMonth(month, startYr);
+        }
+        setIncomeNetByMonth(netMap);
+
+        await syncMonthlySavingsToBudget(startYr, validPlans);
+      } catch (e) {
+        console.log('Failed to load savings page:', e);
+      }
+    },
+    [syncMonthlySavingsToBudget]
+  );
+
+  useEffect(() => {
+    loadSavingsData(fiscalStartYear);
+  }, [fiscalStartYear, loadSavingsData]);
+
+  const snapToGridIndex = useCallback(
+    (targetIdx: number, animated = true) => {
+      const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+      const clampedIdx = Math.max(0, Math.min(maxStartIndex, targetIdx));
+      setActiveGridIndex(clampedIdx);
+      monthScrollRef.current?.scrollTo({
+        x: clampedIdx * monthColWidth,
+        animated,
+      });
+    },
+    [monthColWidth, visibleColumnsCount]
+  );
+
+  useEffect(() => {
+    if (!initialScrollDoneRef.current && monthColWidth > 0) {
+      initialScrollDoneRef.current = true;
+      const curMonth = getCurrentFiscalMonthName();
+      const idx = FISCAL_MONTHS.indexOf(curMonth);
+      if (idx >= 0) {
+        setTimeout(() => {
+          snapToGridIndex(idx, false);
+        }, 60);
+      }
+    }
+  }, [monthColWidth, snapToGridIndex]);
+
+  const handleJumpToCurrentMonth = () => {
+    const curMonth = getCurrentFiscalMonthName();
+    const idx = FISCAL_MONTHS.indexOf(curMonth);
+    if (idx >= 0) {
+      snapToGridIndex(idx, true);
+    }
+  };
+
+  const scheduleGridSnapFromOffset = useCallback(
+    (offsetX: number) => {
+      if (snapTimerRef.current) {
+        clearTimeout(snapTimerRef.current);
+      }
+      snapTimerRef.current = setTimeout(() => {
+        if (monthColWidth <= 0) return;
+        const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+        const rawRatio = offsetX / monthColWidth;
+        const targetIdx = Math.max(0, Math.min(maxStartIndex, Math.round(rawRatio)));
+        setActiveGridIndex(targetIdx);
+
+        const exactTargetX = targetIdx * monthColWidth;
+        if (Math.abs(offsetX - exactTargetX) > 0.5) {
+          monthScrollRef.current?.scrollTo({
+            x: exactTargetX,
+            animated: true,
+          });
+        }
+      }, 90);
+    },
+    [monthColWidth, visibleColumnsCount]
+  );
+
+  const handleGridScroll = (event: any) => {
+    const offsetX = event?.nativeEvent?.contentOffset?.x || 0;
+    scheduleGridSnapFromOffset(offsetX);
+  };
+
+  const handleGridScrollEnd = (event: any) => {
+    const offsetX = event?.nativeEvent?.contentOffset?.x || 0;
+    scheduleGridSnapFromOffset(offsetX);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+    };
+  }, []);
+
+  const handleAddSavingsPlan = async () => {
+    const cleanName = itemName.trim();
+    const cleanCompany = companyNameInput.trim();
+    const cleanPolicy = policyNoInput.trim();
+    const amtCents = safeToCents(amountInput);
+    const meyad = Math.max(1, parseInt(meyadMonthsInput.replace(/[^0-9]/g, ''), 10) || 1);
+
+    if (!cleanName) {
+      Alert.alert('তথ্য অসম্পূর্ণ', 'Savings / Policy / Scheme-এর নাম লিখুন।');
+      return;
+    }
+    if (amtCents <= 0) {
+      Alert.alert('সঠিক পরিমাণ দিন', 'Amount ০-এর বেশি হতে হবে।');
+      return;
+    }
+
+    const sIdx = Math.max(0, FISCAL_MONTHS.indexOf(startMonthName));
+    const newPlan: SavingsPlanItem = {
+      id: `sav-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      type: selectedType,
+      name: cleanName,
+      companyName: cleanCompany || undefined,
+      policyNo: cleanPolicy || undefined,
+      amount: safeFromCents(amtCents),
+      startFiscalYear: fiscalStartYear,
+      startMonthIndex: sIdx,
+      durationMonths: meyad,
+    };
+
+    const nextPlans = [...plans, newPlan];
+    setPlans(nextPlans);
+    await AsyncStorage.setItem(SAVINGS_ITEMS_KEY, JSON.stringify(nextPlans));
+    await syncMonthlySavingsToBudget(fiscalStartYear, nextPlans);
+
+    setItemName('');
+    setCompanyNameInput('');
+    setPolicyNoInput('');
+    setAmountInput('');
+    setMeyadMonthsInput('12');
+    setAddModalVisible(false);
+  };
+
+  const openStrictDeleteModal = (plan: SavingsPlanItem) => {
+    setDeleteTargetPlan(plan);
+    setDeleteCheckboxChecked(false);
+    setDeleteConfirmTypedText('');
+  };
+
+  // ইউজারকে আইটেমের নাম অথবা "DELETE" লিখতে হবে এবং চেকবক্সে টিক দিতে হবে
+  const isDeleteConditionMet = useMemo(() => {
+    if (!deleteTargetPlan || !deleteCheckboxChecked) return false;
+    const typed = deleteConfirmTypedText.trim().toLowerCase();
+    const targetNameLower = deleteTargetPlan.name.trim().toLowerCase();
+    return typed === 'delete' || (targetNameLower.length > 0 && typed === targetNameLower);
+  }, [deleteTargetPlan, deleteCheckboxChecked, deleteConfirmTypedText]);
+
+  const handleConfirmStrictDelete = async () => {
+    if (!deleteTargetPlan || !isDeleteConditionMet) return;
+    const remaining = plans.filter((p) => p.id !== deleteTargetPlan.id);
+    setPlans(remaining);
+    await AsyncStorage.setItem(SAVINGS_ITEMS_KEY, JSON.stringify(remaining));
+    await syncMonthlySavingsToBudget(fiscalStartYear, remaining);
+    setDeleteTargetPlan(null);
+    setDeleteCheckboxChecked(false);
+    setDeleteConfirmTypedText('');
+  };
+
+  const monthlySummary = useMemo(() => {
+    const map: {
+      [month: string]: {
+        incomeNet: number;
+        totalSavings: number;
+        balanceAfterSavings: number;
+      };
+    } = {};
+
+    FISCAL_MONTHS.forEach((month, mIdx) => {
+      const incCents = safeToCents(incomeNetByMonth[month]);
+      const savCents = plans.reduce((sum, item) => {
+        const st = getItemStateForMonth(item, fiscalStartYear, mIdx);
+        return sum + safeToCents(st.activeAmount);
+      }, 0);
+
+      const remCents = incCents - savCents;
+
+      map[month] = {
+        incomeNet: safeFromCents(incCents),
+        totalSavings: safeFromCents(savCents),
+        balanceAfterSavings: safeFromCents(remCents),
+      };
+    });
+
+    return map;
+  }, [incomeNetByMonth, plans, fiscalStartYear]);
+
+  const renderMonthCellsForPlan = (plan: SavingsPlanItem) => {
+    return FISCAL_MONTHS.map((month, mIdx) => {
+      const st = getItemStateForMonth(plan, fiscalStartYear, mIdx);
+      return (
+        <View
+          key={month}
+          style={[
+            styles.cell,
+            { width: monthColWidth },
+            st.isWithinMeyad && styles.activeSavingsCellBg,
+            !st.isWithinMeyad && styles.inactiveCellBg,
+          ]}
+        >
+          <Text
+            style={[
+              styles.cellAmountText,
+              !st.isWithinMeyad && { color: '#94A3B8' },
+            ]}
+          >
+            {st.activeAmount > 0 ? formatMoney(st.activeAmount) : '0.00'}
+          </Text>
+          <Text
+            style={[
+              styles.meyadTagText,
+              st.isWithinMeyad ? { color: '#15803D' } : { color: '#64748B' },
+            ]}
+          >
+            {st.isWithinMeyad ? `${plan.durationMonths}m` : 'Ended'}
+          </Text>
+        </View>
+      );
+    });
+  };
 
   return (
-    <View style={styles.container}>
-      <Ionicons name="heart-outline" size={64} color="#0b5ed7" />
-      <Text style={styles.title}>Welfare</Text>
-      <Text style={styles.subtitle}>কল্যাণমূলক কার্যক্রম ও সহায়তার হিসাব</Text>
-      <Text style={styles.badge}>Coming Soon</Text>
-      <TouchableOpacity style={styles.button} onPress={() => router.replace('/dashboard')}>
-        <Text style={styles.buttonText}>Dashboard-এ ফিরে যান</Text>
-      </TouchableOpacity>
-    </View>
+    <SafeAreaView style={styles.safeArea}>
+      {/* Top Header */}
+      <View style={styles.header}>
+        <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
+          <Ionicons name="arrow-back" size={22} color="#1E293B" />
+        </TouchableOpacity>
+
+        <View style={{ flex: 1 }}>
+          <Text style={styles.headerTitle}>Savings ({fiscalLabel})</Text>
+          <Text style={styles.headerSub} numberOfLines={1}>
+            2-Col Grid • Net - Total Savings
+          </Text>
+        </View>
+
+        <TouchableOpacity style={styles.nowBtn} onPress={handleJumpToCurrentMonth}>
+          <Text style={styles.nowBtnText}>Now</Text>
+        </TouchableOpacity>
+
+        <View style={styles.yearBox}>
+          <TouchableOpacity onPress={() => setFiscalStartYear((y) => y - 1)}>
+            <Ionicons name="chevron-back" size={18} color="#2563EB" />
+          </TouchableOpacity>
+          <Text style={styles.yearText}>{fiscalLabel}</Text>
+          <TouchableOpacity onPress={() => setFiscalStartYear((y) => y + 1)}>
+            <Ionicons name="chevron-forward" size={18} color="#2563EB" />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Action Bar */}
+      <View style={styles.actionBar}>
+        <TouchableOpacity
+          style={styles.addBtn}
+          onPress={() => {
+            setStartMonthName(getCurrentFiscalMonthName());
+            setAddModalVisible(true);
+          }}
+        >
+          <Ionicons name="add-circle-outline" size={17} color="#FFFFFF" />
+          <Text style={styles.addBtnText}>+ Add Savings / Policy / Scheme</Text>
+        </TouchableOpacity>
+
+        <View style={styles.gridStepGroup}>
+          <TouchableOpacity
+            style={styles.gridStepBtn}
+            onPress={() => snapToGridIndex(activeGridIndex - 1, true)}
+          >
+            <Ionicons name="chevron-back" size={16} color="#1E3A8A" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.gridStepBtn}
+            onPress={() => snapToGridIndex(activeGridIndex + 1, true)}
+          >
+            <Ionicons name="chevron-forward" size={16} color="#1E3A8A" />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Fixed Particulars Column + 2-Column Grid-Snapped Months */}
+      <ScrollView style={styles.verticalScroll}>
+        <View style={styles.sheetWrapper}>
+          {/* Left Fixed Column */}
+          <View style={[styles.fixedColumn, { width: descColWidth }]}>
+            <View style={[styles.headerCell, { width: descColWidth }]}>
+              <Text style={styles.headerCellText}>Policy / Scheme</Text>
+            </View>
+
+            <View style={[styles.summaryCell, styles.incomeNetBg, { width: descColWidth }]}>
+              <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]}>Income Net</Text>
+            </View>
+
+            <View style={[styles.summaryCell, styles.totalSavingsBg, { width: descColWidth }]}>
+              <Text style={[styles.summaryTitle, { color: '#B91C1C' }]}>
+                Total Savings (-)
+              </Text>
+            </View>
+
+            <View style={[styles.summaryCell, styles.balanceAfterBg, { width: descColWidth }]}>
+              <Text style={[styles.summaryTitle, { color: '#15803D' }]}>Net Balance</Text>
+            </View>
+
+            {plans.length === 0 ? (
+              <View style={[styles.emptyFixedBox, { width: descColWidth }]}>
+                <Text style={styles.emptyFixedText}>
+                  কোনো সেভিংস নেই। উপরে + Add দিয়ে যোগ করুন।
+                </Text>
+              </View>
+            ) : (
+              plans.map((plan) => {
+                const now = new Date();
+                const nowStartYear =
+                  now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+                const nowIdx = Math.max(0, FISCAL_MONTHS.indexOf(getCurrentFiscalMonthName()));
+                const st = getItemStateForMonth(plan, nowStartYear, nowIdx);
+
+                const subParts: string[] = [plan.type];
+                if (plan.companyName) subParts.push(plan.companyName);
+                if (plan.policyNo) subParts.push(`#${plan.policyNo}`);
+                subParts.push(`${plan.durationMonths}m`);
+
+                return (
+                  <View key={plan.id} style={[styles.descCell, { width: descColWidth }]}>
+                    <View style={{ flex: 1, marginRight: 4 }}>
+                      <Text style={styles.descTitle} numberOfLines={1}>
+                        {plan.name}
+                      </Text>
+                      <Text style={styles.descMeta} numberOfLines={1}>
+                        {subParts.join(' • ')}
+                        {st.isExpiredByNow ? ' • মেয়াদ শেষ' : ''}
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      onPress={() => openStrictDeleteModal(plan)}
+                      style={[
+                        styles.deleteIconBtn,
+                        st.isExpiredByNow && styles.expiredDeleteHighlight,
+                      ]}
+                      accessibilityLabel="Delete savings item"
+                    >
+                      <Ionicons
+                        name="trash-outline"
+                        size={15}
+                        color={st.isExpiredByNow ? '#FFFFFF' : '#DC2626'}
+                      />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })
+            )}
+          </View>
+
+          {/* Right Exact 2-Column Grid-Snap Viewport */}
+          <View style={{ width: exactRightViewportWidth, overflow: 'hidden' }}>
+            <ScrollView
+              ref={monthScrollRef}
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              snapToOffsets={gridSnapOffsets}
+              snapToAlignment="start"
+              decelerationRate="fast"
+              disableIntervalMomentum={true}
+              scrollEventThrottle={16}
+              onScroll={handleGridScroll}
+              onMomentumScrollEnd={handleGridScrollEnd}
+              onScrollEndDrag={handleGridScrollEnd}
+            >
+              <View>
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => {
+                    const calYear = getMonthCalendarYear(month, fiscalStartYear);
+                    const isCurrent = month === getCurrentFiscalMonthName();
+                    return (
+                      <View
+                        key={month}
+                        style={[
+                          styles.headerCell,
+                          { width: monthColWidth },
+                          isCurrent && styles.currentMonthHeader,
+                        ]}
+                      >
+                        <Text style={styles.headerCellText} numberOfLines={1}>
+                          {month.slice(0, 3)} {String(calYear).slice(-2)}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => (
+                    <View
+                      key={month}
+                      style={[styles.summaryCell, styles.incomeNetBg, { width: monthColWidth }]}
+                    >
+                      <Text style={[styles.summaryValue, { color: '#1E3A8A' }]}>
+                        {formatMoney(monthlySummary[month]?.incomeNet || 0)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => (
+                    <View
+                      key={month}
+                      style={[
+                        styles.summaryCell,
+                        styles.totalSavingsBg,
+                        { width: monthColWidth },
+                      ]}
+                    >
+                      <Text style={[styles.summaryValue, { color: '#B91C1C' }]}>
+                        -{formatMoney(monthlySummary[month]?.totalSavings || 0)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => {
+                    const bal = monthlySummary[month]?.balanceAfterSavings || 0;
+                    return (
+                      <View
+                        key={month}
+                        style={[
+                          styles.summaryCell,
+                          styles.balanceAfterBg,
+                          { width: monthColWidth },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.summaryValue,
+                            { color: bal >= 0 ? '#15803D' : '#B91C1C' },
+                          ]}
+                        >
+                          {formatMoney(bal)}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
+                {plans.length === 0 ? (
+                  <View style={[styles.emptyGridBox, { width: monthColWidth * FISCAL_MONTHS.length }]}>
+                    <Text style={styles.emptyFixedText}>—</Text>
+                  </View>
+                ) : (
+                  plans.map((plan) => (
+                    <View key={plan.id} style={styles.row}>
+                      {renderMonthCellsForPlan(plan)}
+                    </View>
+                  ))
+                )}
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </ScrollView>
+
+      {/* Add Savings / Policy / Scheme Modal */}
+      <Modal visible={addModalVisible} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>নতুন Savings / Policy / Scheme যুক্ত করুন</Text>
+
+            <Text style={styles.inputLabel}>ধরন (Type)</Text>
+            <View style={styles.typeRow}>
+              {(['Insurance', 'DPS', 'Others'] as SavingsCategoryType[]).map((tp) => (
+                <TouchableOpacity
+                  key={tp}
+                  style={[styles.typeChip, selectedType === tp && styles.typeChipActive]}
+                  onPress={() => setSelectedType(tp)}
+                >
+                  <Text
+                    style={[styles.typeChipText, selectedType === tp && styles.typeChipTextActive]}
+                  >
+                    {tp}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.inputLabel}>Savings / Policy / Scheme Name *</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="e.g. Jibon Bima Policy, Monthly DPS..."
+              value={itemName}
+              onChangeText={setItemName}
+            />
+
+            <Text style={styles.inputLabel}>Company Name (Optional)</Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder="e.g. MetLife, DBBL, Islami Bank (ঐচ্ছিক)"
+              value={companyNameInput}
+              onChangeText={setCompanyNameInput}
+            />
+
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <View style={{ flex: 1.2 }}>
+                <Text style={styles.inputLabel}>Policy No.</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. POL-984512"
+                  value={policyNoInput}
+                  onChangeText={setPolicyNoInput}
+                />
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.inputLabel}>Amount (Tk.) *</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  keyboardType="numeric"
+                  placeholder="0.00"
+                  value={amountInput}
+                  onChangeText={setAmountInput}
+                />
+              </View>
+            </View>
+
+            <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
+              <View style={{ flex: 0.85 }}>
+                <Text style={styles.inputLabel}>মেয়াদ (মাস)</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  keyboardType="numeric"
+                  placeholder="12"
+                  value={meyadMonthsInput}
+                  onChangeText={setMeyadMonthsInput}
+                />
+              </View>
+
+              <View style={{ flex: 1.35 }}>
+                <Text style={styles.inputLabel}>শুরুর মাস</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 6 }}>
+                  <View style={{ flexDirection: 'row', gap: 5 }}>
+                    {FISCAL_MONTHS.map((m) => (
+                      <TouchableOpacity
+                        key={m}
+                        onPress={() => setStartMonthName(m)}
+                        style={[styles.monthChip, startMonthName === m && styles.monthChipActive]}
+                      >
+                        <Text
+                          style={[
+                            styles.monthChipText,
+                            startMonthName === m && styles.monthChipTextActive,
+                          ]}
+                        >
+                          {m.slice(0, 3)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                onPress={() => setAddModalVisible(false)}
+              >
+                <Text style={{ color: '#334155', fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
+                onPress={handleAddSavingsPlan}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Save</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Strict Two-Step Delete Confirmation Modal */}
+      <Modal visible={Boolean(deleteTargetPlan)} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={[styles.modalTitle, { color: '#B91C1C' }]}>
+              কঠিন ডিলিট নিশ্চিতকরণ (Strict Delete)
+            </Text>
+
+            {deleteTargetPlan && (
+              <View style={styles.deleteSummaryBox}>
+                <Text style={styles.deletePlanName}>Name: {deleteTargetPlan.name}</Text>
+                {deleteTargetPlan.companyName ? (
+                  <Text style={styles.deletePlanSub}>Company: {deleteTargetPlan.companyName}</Text>
+                ) : null}
+                {deleteTargetPlan.policyNo ? (
+                  <Text style={styles.deletePlanSub}>Policy No.: {deleteTargetPlan.policyNo}</Text>
+                ) : null}
+                <Text style={styles.deletePlanSub}>
+                  Amount: {formatMoney(deleteTargetPlan.amount)} Tk. • Meyad:{' '}
+                  {deleteTargetPlan.durationMonths} months
+                </Text>
+              </View>
+            )}
+
+            <TouchableOpacity
+              style={styles.strictCheckRow}
+              onPress={() => setDeleteCheckboxChecked((prev) => !prev)}
+            >
+              <Ionicons
+                name={deleteCheckboxChecked ? 'checkbox' : 'square-outline'}
+                size={22}
+                color="#DC2626"
+              />
+              <Text style={styles.strictCheckText}>
+                আমি বুঝতে পারছি যে মেয়াদ শেষে বা ডিলিট করলে এই রেকর্ডটি স্থায়ীভাবে মুছে যাবে।
+              </Text>
+            </TouchableOpacity>
+
+            <Text style={styles.inputLabel}>
+              নিশ্চিত করতে "{deleteTargetPlan?.name}" অথবা "DELETE" লিখুন:
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder='Type "DELETE" or exact name'
+              value={deleteConfirmTypedText}
+              onChangeText={setDeleteConfirmTypedText}
+              autoCapitalize="none"
+            />
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                onPress={() => {
+                  setDeleteTargetPlan(null);
+                  setDeleteCheckboxChecked(false);
+                  setDeleteConfirmTypedText('');
+                }}
+              >
+                <Text style={{ color: '#334155', fontWeight: '600' }}>Cancel</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                disabled={!isDeleteConditionMet}
+                style={[
+                  styles.modalBtn,
+                  {
+                    backgroundColor: isDeleteConditionMet ? '#DC2626' : '#FCA5A5',
+                  },
+                ]}
+                onPress={handleConfirmStrictDelete}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Permanent Delete</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24, backgroundColor: '#f5f7fb' },
-  title: { fontSize: 26, fontWeight: 'bold', marginTop: 16, color: '#172b4d' },
-  subtitle: { fontSize: 15, color: '#64748b', marginTop: 8, textAlign: 'center' },
-  badge: { marginTop: 20, paddingHorizontal: 18, paddingVertical: 8, backgroundColor: '#e0ecff', color: '#0b5ed7', borderRadius: 20, fontWeight: '600' },
-  button: { marginTop: 28, backgroundColor: '#0b5ed7', padding: 14, borderRadius: 10 },
-  buttonText: { color: '#fff', fontWeight: 'bold' },
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+    paddingTop: Platform.OS === 'android' ? 28 : 0,
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    gap: 5,
+  },
+  backBtn: {
+    padding: 3,
+  },
+  headerTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  headerSub: {
+    fontSize: 10,
+    color: '#64748B',
+  },
+  nowBtn: {
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  nowBtnText: {
+    color: '#15803D',
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  yearBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 6,
+    paddingVertical: 5,
+    borderRadius: 7,
+    gap: 2,
+  },
+  yearText: {
+    fontWeight: '700',
+    color: '#1E40AF',
+    fontSize: 12,
+  },
+  actionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    gap: 8,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  addBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2563EB',
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 5,
+  },
+  addBtnText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  gridStepGroup: {
+    flexDirection: 'row',
+    gap: 4,
+  },
+  gridStepBtn: {
+    width: 30,
+    height: 32,
+    borderRadius: 7,
+    backgroundColor: '#DBEAFE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verticalScroll: {
+    flex: 1,
+  },
+  sheetWrapper: {
+    flexDirection: 'row',
+    backgroundColor: '#FFFFFF',
+  },
+  fixedColumn: {
+    borderRightWidth: 2,
+    borderRightColor: '#94A3B8',
+    backgroundColor: '#FFFFFF',
+    zIndex: 10,
+  },
+  row: {
+    flexDirection: 'row',
+  },
+  headerCell: {
+    height: 42,
+    backgroundColor: '#1E293B',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRightWidth: 1,
+    borderRightColor: '#334155',
+    paddingHorizontal: 4,
+  },
+  currentMonthHeader: {
+    backgroundColor: '#1D4ED8',
+  },
+  headerCellText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 11.5,
+    textAlign: 'center',
+  },
+  summaryCell: {
+    height: 44,
+    justifyContent: 'center',
+    paddingHorizontal: 6,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#94A3B8',
+  },
+  incomeNetBg: {
+    backgroundColor: '#DBEAFE',
+  },
+  totalSavingsBg: {
+    backgroundColor: '#FEE2E2',
+  },
+  balanceAfterBg: {
+    backgroundColor: '#DCFCE7',
+  },
+  summaryTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  summaryValue: {
+    fontSize: 12,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
+  descCell: {
+    height: 54,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+  },
+  descTitle: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  descMeta: {
+    fontSize: 9.5,
+    color: '#475569',
+    marginTop: 1,
+  },
+  deleteIconBtn: {
+    padding: 5,
+    borderRadius: 6,
+    backgroundColor: '#FEF2F2',
+  },
+  expiredDeleteHighlight: {
+    backgroundColor: '#DC2626',
+  },
+  cell: {
+    height: 54,
+    borderRightWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: '#CBD5E1',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  activeSavingsCellBg: {
+    backgroundColor: '#FFFFFF',
+  },
+  inactiveCellBg: {
+    backgroundColor: '#F8FAFC',
+  },
+  cellAmountText: {
+    textAlign: 'right',
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  meyadTagText: {
+    textAlign: 'right',
+    fontSize: 9,
+    fontWeight: '700',
+    marginTop: 1,
+  },
+  emptyFixedBox: {
+    height: 70,
+    justifyContent: 'center',
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  emptyGridBox: {
+    height: 70,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  emptyFixedText: {
+    fontSize: 11,
+    color: '#64748B',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    padding: 18,
+    maxWidth: 450,
+    width: '100%',
+    alignSelf: 'center',
+    gap: 6,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0F172A',
+    marginBottom: 6,
+  },
+  inputLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  typeRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 6,
+  },
+  typeChip: {
+    flex: 1,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+  },
+  typeChipActive: {
+    backgroundColor: '#2563EB',
+    borderColor: '#2563EB',
+  },
+  typeChipText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+  },
+  typeChipTextActive: {
+    color: '#FFFFFF',
+  },
+  modalInput: {
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    fontSize: 13.5,
+    color: '#0F172A',
+    backgroundColor: '#F8FAFC',
+    marginBottom: 6,
+  },
+  monthChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+  },
+  monthChipActive: {
+    backgroundColor: '#2563EB',
+    borderColor: '#2563EB',
+  },
+  monthChipText: {
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  monthChipTextActive: {
+    color: '#FFFFFF',
+  },
+  deleteSummaryBox: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FECACA',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 6,
+    gap: 2,
+  },
+  deletePlanName: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#991B1B',
+  },
+  deletePlanSub: {
+    fontSize: 11.5,
+    color: '#7F1D1D',
+  },
+  strictCheckRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  strictCheckText: {
+    flex: 1,
+    fontSize: 11.5,
+    color: '#334155',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 10,
+    marginTop: 6,
+  },
+  modalBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
 });

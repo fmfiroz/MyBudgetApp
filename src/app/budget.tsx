@@ -3,27 +3,31 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    Alert,
-    Modal,
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    useWindowDimensions,
-    View,
+  Alert,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
 import {
-    getBudgetShopDebtLink,
-    getDebtStorageKey,
-    getPrevYearMonth,
-    MonthlyDebtRecord,
-    saveShopDebtPaymentFromBudget,
+  getBudgetShopDebtLink,
+  getPrevYearMonth,
+  MonthlyDebtRecord,
+  saveShopDebtPaymentFromBudget
 } from '../utils/shopDebtBudgetSync';
 
 export type AppLanguage = 'en' | 'bn';
+
+interface ShopProfile {
+  id: string;
+  name: string;
+}
 
 const FISCAL_MONTHS = [
   'July',
@@ -75,6 +79,7 @@ interface BudgetCategoryRow {
   enName: string;
   bnName: string;
   isShopDebtRow?: boolean;
+  linkedShopId?: string;
   amounts: { [month: string]: number };
   cleared: { [month: string]: boolean };
 }
@@ -91,6 +96,12 @@ const BUDGET_MONTH_KEY_PREFIX = '@mybudget_budget_v3_';
 const BUDGET_ROWS_META_KEY = '@mybudget_budget_rows_meta_v3';
 const SAVINGS_MONTH_KEY_PREFIX = '@mybudget_savings_monthly_v1_';
 const LANGUAGE_STORAGE_KEY = '@mybudget_app_language_v1';
+const SHOPS_LIST_KEY = '@mybudget_debt_shops_v2';
+
+const DEFAULT_SHOPS: ShopProfile[] = [
+  { id: 'shop-ab-hakim', name: 'Ab. Hakim' },
+  { id: 'shop-ab-karim', name: 'Ab. Karim' },
+];
 
 const UI_TEXT = {
   en: {
@@ -118,7 +129,7 @@ const UI_TEXT = {
     amountLabel: 'Amount (Tk.)',
     applyForwardLabel: 'Apply to remaining months up to June',
     missingName: 'Please enter a budget item name.',
-    shopDebtSyncHint: 'Current & Next month grid • Prev Shop Debt -> Next Budget',
+    shopDebtSyncHint: 'Shop-wise Debt auto-linked • Current & Next Grid',
     billStatusLabel: 'Bill Payment Status',
     clearedBadge: 'Cleared',
     markClearedBtn: 'Mark Bill Cleared',
@@ -151,7 +162,7 @@ const UI_TEXT = {
     amountLabel: 'টাকার পরিমাণ',
     applyForwardLabel: 'জুন পর্যন্ত পরবর্তী মাসগুলোতেও প্রযোজ্য হবে',
     missingName: 'অনুগ্রহ করে খাতের নাম লিখুন।',
-    shopDebtSyncHint: 'Current ও Next মাস গ্রিডে • আগের Shop Debt পরের বাজেটে যায়',
+    shopDebtSyncHint: 'দোকানভিত্তিক Shop Debt খাত যুক্ত • Current ও Next গ্রিড',
     billStatusLabel: 'বিল পরিশোধের অবস্থা',
     clearedBadge: 'Cleared',
     markClearedBtn: 'বিল ক্লিয়ার মার্ক করুন',
@@ -237,7 +248,19 @@ function buildEmptyClearedMap(): { [month: string]: boolean } {
   return map;
 }
 
-const DEFAULT_CATEGORIES: BudgetCategoryRow[] = [
+function getShopMonthStorageKey(shopId: string, yearMonth: string): string {
+  if (shopId === 'shop-ab-hakim') {
+    return `@mybudget_shop_debt_v2_hakim_${yearMonth}`;
+  }
+  return `@mybudget_shop_debt_v2_${shopId}_${yearMonth}`;
+}
+
+function getBudgetRowIdForShop(shopId: string): string {
+  if (shopId === 'shop-ab-hakim') return 'cat-hakim-debt';
+  return `cat-debt-${shopId}`;
+}
+
+const BASE_NON_DEBT_CATEGORIES: BudgetCategoryRow[] = [
   {
     id: 'cat-daily-market',
     enName: 'Daily Market Expense',
@@ -249,14 +272,6 @@ const DEFAULT_CATEGORIES: BudgetCategoryRow[] = [
     id: 'cat-other-market',
     enName: 'Other Market Expense',
     bnName: 'অন্যান্য বাজার খরচ',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-hakim-debt',
-    enName: "A. Hakim's Debt",
-    bnName: 'আ. হাকিমের ধার',
-    isShopDebtRow: true,
     amounts: buildEmptyMonthMap(),
     cleared: buildEmptyClearedMap(),
   },
@@ -416,8 +431,6 @@ export default function BudgetScreen() {
 
   const t = UI_TEXT[lang];
 
-  // Income পেজের মতো নিখুঁত গ্রিড-স্ন্যাপ কলাম গণনা:
-  // মোবাইলে দৃশ্যমান অংশে ঠিক ২টি কলাম (Current Month ও Next Month) ফিট করে
   const isMobileScreen = screenWidth < 768;
   const visibleColumnsCount = isMobileScreen
     ? 2
@@ -447,7 +460,7 @@ export default function BudgetScreen() {
   };
 
   const [fiscalStartYear, setFiscalStartYear] = useState<number>(getInitialFiscalStartYear);
-  const [rows, setRows] = useState<BudgetCategoryRow[]>(DEFAULT_CATEGORIES);
+  const [rows, setRows] = useState<BudgetCategoryRow[]>([]);
 
   const [monthNetSavings, setMonthNetSavings] = useState<{ [month: string]: number }>(() => {
     const obj: { [month: string]: number } = {};
@@ -507,28 +520,86 @@ export default function BudgetScreen() {
     return `${mLabel} ${String(calYear).slice(-2)}`;
   };
 
+  // Shop Debt-এর সব দোকানের নাম অনুযায়ী বাজেট তালিকায় খাত সিঙ্ক ও লোড করা
   const loadFullYearBudget = useCallback(async (startYr: number) => {
     try {
-      const metaRaw = await AsyncStorage.getItem(BUDGET_ROWS_META_KEY);
-      let activeRows: BudgetCategoryRow[] = DEFAULT_CATEGORIES.map((r) => ({
-        ...r,
-        amounts: { ...r.amounts },
-        cleared: { ...r.cleared },
-      }));
+      const [shopsRaw, metaRaw] = await Promise.all([
+        AsyncStorage.getItem(SHOPS_LIST_KEY),
+        AsyncStorage.getItem(BUDGET_ROWS_META_KEY),
+      ]);
+
+      const shopList: ShopProfile[] = shopsRaw
+        ? (JSON.parse(shopsRaw) as ShopProfile[])
+        : DEFAULT_SHOPS;
+
+      const validShops =
+        Array.isArray(shopList) && shopList.length > 0 ? shopList : DEFAULT_SHOPS;
+      const validShopIdsSet = new Set(validShops.map((s) => s.id));
+
+      let baseRows: BudgetCategoryRow[] = [];
 
       if (metaRaw) {
         const parsedMeta = JSON.parse(metaRaw) as BudgetCategoryRow[];
         if (Array.isArray(parsedMeta) && parsedMeta.length > 0) {
-          activeRows = parsedMeta.map((m) => ({
-            id: m.id,
-            enName: m.enName || m.bnName || 'Item',
-            bnName: m.bnName || m.enName || 'খাত',
-            isShopDebtRow: Boolean(m.isShopDebtRow),
-            amounts: buildEmptyMonthMap(),
-            cleared: buildEmptyClearedMap(),
-          }));
+          // মুছে ফেলা দোকানের পুরোনো রো বাদ দিয়ে বাকিগুলো রাখা
+          baseRows = parsedMeta
+            .filter((m) => {
+              if (!m.isShopDebtRow) return true;
+              const sId = m.linkedShopId || 'shop-ab-hakim';
+              return validShopIdsSet.has(sId);
+            })
+            .map((m) => ({
+              id: m.id,
+              enName: m.enName || m.bnName || 'Item',
+              bnName: m.bnName || m.enName || 'খাত',
+              isShopDebtRow: Boolean(m.isShopDebtRow),
+              linkedShopId: m.linkedShopId || (m.isShopDebtRow ? 'shop-ab-hakim' : undefined),
+              amounts: buildEmptyMonthMap(),
+              cleared: buildEmptyClearedMap(),
+            }));
         }
       }
+
+      if (baseRows.length === 0) {
+        baseRows = BASE_NON_DEBT_CATEGORIES.map((r) => ({
+          ...r,
+          amounts: buildEmptyMonthMap(),
+          cleared: buildEmptyClearedMap(),
+        }));
+      }
+
+      // প্রতিটি দোকানের জন্য বাজেট তালিকায় খাত নিশ্চিত করা (না থাকলে যুক্ত হবে, নাম বদলালে আপডেট হবে)
+      validShops.forEach((shop) => {
+        const rowId = getBudgetRowIdForShop(shop.id);
+        const existingIdx = baseRows.findIndex(
+          (r) => r.id === rowId || (r.isShopDebtRow && r.linkedShopId === shop.id)
+        );
+        const enTitle = `${shop.name}'s Debt`;
+        const bnTitle = `${shop.name}-এর ধার`;
+
+        if (existingIdx >= 0) {
+          baseRows[existingIdx] = {
+            ...baseRows[existingIdx],
+            id: rowId,
+            enName: enTitle,
+            bnName: bnTitle,
+            isShopDebtRow: true,
+            linkedShopId: shop.id,
+          };
+        } else {
+          // ২য় অবস্থানে (Daily Market-এর পর) দোকানের ধার খাতটি যুক্ত করা
+          const insertPos = Math.min(2, baseRows.length);
+          baseRows.splice(insertPos, 0, {
+            id: rowId,
+            enName: enTitle,
+            bnName: bnTitle,
+            isShopDebtRow: true,
+            linkedShopId: shop.id,
+            amounts: buildEmptyMonthMap(),
+            cleared: buildEmptyClearedMap(),
+          });
+        }
+      });
 
       const netSavMap: { [month: string]: number } = {};
 
@@ -536,15 +607,11 @@ export default function BudgetScreen() {
         const ym = getYearMonthForFiscalMonth(month, startYr);
         const prevYM = getPrevYearMonth(ym);
 
-        const [netPay, savingsAmt, budgetRaw, prevDebtRaw, curDebtRaw, nextLink] =
-          await Promise.all([
-            getIncomeNetPayForMonth(month, startYr),
-            getSavingsForYearMonth(ym),
-            AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`),
-            AsyncStorage.getItem(getDebtStorageKey(prevYM)),
-            AsyncStorage.getItem(getDebtStorageKey(ym)),
-            getBudgetShopDebtLink(ym),
-          ]);
+        const [netPay, savingsAmt, budgetRaw] = await Promise.all([
+          getIncomeNetPayForMonth(month, startYr),
+          getSavingsForYearMonth(ym),
+          AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`),
+        ]);
 
         const netSavCents = safeToCents(netPay) - safeToCents(savingsAmt);
         netSavMap[month] = safeFromCents(netSavCents);
@@ -553,37 +620,49 @@ export default function BudgetScreen() {
           ? (JSON.parse(budgetRaw) as Partial<MonthlyBudgetStorage>)
           : {};
 
-        const prevDebtRec: Partial<MonthlyDebtRecord> = prevDebtRaw
-          ? (JSON.parse(prevDebtRaw) as Partial<MonthlyDebtRecord>)
-          : {};
-
-        const curDebtRec: Partial<MonthlyDebtRecord> = curDebtRaw
-          ? (JSON.parse(curDebtRaw) as Partial<MonthlyDebtRecord>)
-          : {};
-
-        const prevMonthDebtCarryoverCents =
-          safeToCents(prevDebtRec.totalBalanceDue) > 0
-            ? safeToCents(prevDebtRec.totalBalanceDue)
-            : safeToCents(curDebtRec.prevMonthCarryover) > 0
-            ? safeToCents(curDebtRec.prevMonthCarryover)
-            : safeToCents(nextLink.carryoverDebtFromPrevMonth);
-
-        activeRows.forEach((row) => {
+        for (const row of baseRows) {
           row.cleared[month] = Boolean(parsedMonth.rowCleared?.[row.id]);
-          if (row.isShopDebtRow) {
+
+          if (row.isShopDebtRow && row.linkedShopId) {
+            const [prevShopRaw, curShopRaw, legacyLink] = await Promise.all([
+              AsyncStorage.getItem(getShopMonthStorageKey(row.linkedShopId, prevYM)),
+              AsyncStorage.getItem(getShopMonthStorageKey(row.linkedShopId, ym)),
+              row.linkedShopId === 'shop-ab-hakim'
+                ? getBudgetShopDebtLink(ym)
+                : Promise.resolve(null),
+            ]);
+
+            const prevRec: Partial<MonthlyDebtRecord> = prevShopRaw
+              ? (JSON.parse(prevShopRaw) as Partial<MonthlyDebtRecord>)
+              : {};
+            const curRec: Partial<MonthlyDebtRecord> = curShopRaw
+              ? (JSON.parse(curShopRaw) as Partial<MonthlyDebtRecord>)
+              : {};
+
+            const carryoverCents =
+              safeToCents(prevRec.totalBalanceDue) > 0
+                ? safeToCents(prevRec.totalBalanceDue)
+                : safeToCents(curRec.prevMonthCarryover) > 0
+                ? safeToCents(curRec.prevMonthCarryover)
+                : safeToCents(legacyLink?.carryoverDebtFromPrevMonth);
+
+            const savedCellValCents =
+              parsedMonth.rowAmounts?.[row.id] !== undefined
+                ? safeToCents(parsedMonth.rowAmounts[row.id])
+                : 0;
+
             row.amounts[month] =
-              parsedMonth.rowAmounts?.[row.id] !== undefined &&
-              safeToCents(parsedMonth.rowAmounts?.[row.id]) > 0
-                ? safeFromCents(safeToCents(parsedMonth.rowAmounts?.[row.id]))
-                : safeFromCents(prevMonthDebtCarryoverCents);
+              savedCellValCents > 0
+                ? safeFromCents(savedCellValCents)
+                : safeFromCents(carryoverCents);
           } else {
             row.amounts[month] = safeFromCents(safeToCents(parsedMonth.rowAmounts?.[row.id]));
           }
-        });
+        }
       }
 
       setMonthNetSavings(netSavMap);
-      setRows(activeRows);
+      setRows(baseRows);
     } catch (e) {
       console.log('Failed to load budget sheet:', e);
     }
@@ -606,9 +685,8 @@ export default function BudgetScreen() {
     [monthColWidth, visibleColumnsCount]
   );
 
-  // ওপেন হলেই Current Month (এবং ঠিক পাশেই Next Month) সামনে এনে বসিয়ে দেওয়া
   useEffect(() => {
-    if (!initialScrollDoneRef.current && monthColWidth > 0) {
+    if (!initialScrollDoneRef.current && monthColWidth > 0 && rows.length > 0) {
       initialScrollDoneRef.current = true;
       const curMonth = getCurrentFiscalMonthName();
       const idx = FISCAL_MONTHS.indexOf(curMonth);
@@ -618,7 +696,7 @@ export default function BudgetScreen() {
         }, 60);
       }
     }
-  }, [monthColWidth, snapToGridIndex]);
+  }, [monthColWidth, rows.length, snapToGridIndex]);
 
   const handleJumpToCurrentMonth = () => {
     const curMonth = getCurrentFiscalMonthName();
@@ -628,7 +706,6 @@ export default function BudgetScreen() {
     }
   };
 
-  // স্লো-মোশন বা ধীরে স্লাইড করলেও যেন প্রতিটি মাস পুরোপুরি গ্রিডে স্ন্যাপ করে সামনে বা পেছনে যায়
   const scheduleGridSnapFromOffset = useCallback(
     (offsetX: number) => {
       if (snapTimerRef.current) {
@@ -678,6 +755,7 @@ export default function BudgetScreen() {
         enName: r.enName,
         bnName: r.bnName,
         isShopDebtRow: Boolean(r.isShopDebtRow),
+        linkedShopId: r.linkedShopId,
         amounts: buildEmptyMonthMap(),
         cleared: buildEmptyClearedMap(),
       }));
@@ -687,26 +765,26 @@ export default function BudgetScreen() {
         const ym = getYearMonthForFiscalMonth(month, fiscalStartYear);
         const amountsMap: { [rowId: string]: number } = {};
         const clearedMap: { [rowId: string]: boolean } = {};
-        let shopDebtVal = 0;
+        let totalShopDebtVal = 0;
 
         updatedRows.forEach((r) => {
           const val = safeFromCents(safeToCents(r.amounts[month]));
           amountsMap[r.id] = val;
           clearedMap[r.id] = Boolean(r.cleared[month]);
           if (r.isShopDebtRow) {
-            shopDebtVal = val;
+            totalShopDebtVal += val;
           }
         });
 
         const payload: MonthlyBudgetStorage = {
           yearMonth: ym,
-          shopDebtPaid: shopDebtVal,
+          shopDebtPaid: totalShopDebtVal,
           rowAmounts: amountsMap,
           rowCleared: clearedMap,
           updatedAt: new Date().toISOString(),
         };
         await AsyncStorage.setItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`, JSON.stringify(payload));
-        await saveShopDebtPaymentFromBudget(ym, shopDebtVal);
+        await saveShopDebtPaymentFromBudget(ym, totalShopDebtVal);
       }
     },
     [fiscalStartYear]
@@ -946,7 +1024,7 @@ export default function BudgetScreen() {
         </View>
       </View>
 
-      {/* Income-style Fixed Description + Slow-Slide Safe Grid-Snap Months */}
+      {/* Fixed Description + Exact Grid-Snap Months */}
       <ScrollView style={styles.verticalScroll}>
         <View style={styles.sheetWrapper}>
           {/* Left Fixed Column */}
@@ -955,34 +1033,42 @@ export default function BudgetScreen() {
               <Text style={styles.headerCellText}>{t.particulars}</Text>
             </View>
 
-            {/* 1. Net Savings (উপরে) */}
+            {/* 1. Net Savings */}
             <View style={[styles.summaryCell, styles.netSavingsBg, { width: descColWidth }]}>
               <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]}>{t.netSavings}</Text>
             </View>
 
-            {/* 2. Total Budget (নিচে) */}
+            {/* 2. Total Budget */}
             <View style={[styles.summaryCell, styles.totalBudgetBg, { width: descColWidth }]}>
               <Text style={[styles.summaryTitle, { color: '#0F172A' }]}>{t.totalBudget}</Text>
             </View>
 
-            {/* 3. Extra / Ghatti (সবচেয়ে নিচে সামারিতে) */}
+            {/* 3. Extra / Ghatti */}
             <View style={[styles.summaryCell, styles.extraBg, { width: descColWidth }]}>
               <Text style={[styles.summaryTitle, { color: '#15803D' }]}>{t.extraGhatti}</Text>
             </View>
 
-            {/* Category Rows */}
+            {/* Category Rows (দোকানভিত্তিক Shop Debt খাতসহ) */}
             {rows.map((row) => (
               <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
-                <Text style={styles.descText} numberOfLines={2}>
-                  {getRowDisplayName(row)}
-                </Text>
-                <TouchableOpacity
-                  onPress={() => handleDeleteRow(row.id)}
-                  accessibilityLabel="Delete row"
-                  style={{ paddingLeft: 4 }}
-                >
-                  <Ionicons name="trash-outline" size={15} color="#DC2626" />
-                </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.descText} numberOfLines={2}>
+                    {getRowDisplayName(row)}
+                  </Text>
+                  {row.isShopDebtRow && (
+                    <Text style={styles.linkedShopBadge}>Shop Debt Sync</Text>
+                  )}
+                </View>
+
+                {!row.isShopDebtRow && (
+                  <TouchableOpacity
+                    onPress={() => handleDeleteRow(row.id)}
+                    accessibilityLabel="Delete row"
+                    style={{ paddingLeft: 4 }}
+                  >
+                    <Ionicons name="trash-outline" size={15} color="#DC2626" />
+                  </TouchableOpacity>
+                )}
               </View>
             ))}
           </View>
@@ -1408,10 +1494,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#F8FAFC',
   },
   descText: {
-    flex: 1,
     fontSize: 11.5,
     fontWeight: '600',
     color: '#1E293B',
+  },
+  linkedShopBadge: {
+    fontSize: 8.5,
+    fontWeight: '700',
+    color: '#1D4ED8',
+    marginTop: 1,
   },
   cell: {
     height: 52,

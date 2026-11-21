@@ -239,16 +239,16 @@ export default function IncomeSheetScreen() {
   const { width: screenWidth } = useWindowDimensions();
 
   // নিখুঁত গ্রিড সিস্টেম:
-  // ডান পাশের দৃশ্যমান প্রস্থকে ঠিক ২টি সমান মাস কলামে ভাগ করা হয়েছে,
-  // যাতে স্লাইড করার পর প্রতিটি মাস গ্রিড লাইনের সাথে পুরোপুরি ফিট হয়ে বসে (ডানে/বামে কাটা অংশ না থাকে)।
+  // মোবাইলে শুরুতে বাম পাশে Fixed খাত কলাম এবং ডান পাশে Current Month + Next Month একসাথে দেখাবে
   const isMobileScreen = screenWidth < 768;
-  const visibleColumnsCount = isMobileScreen ? 2 : Math.max(4, Math.floor((screenWidth - 215) / 114));
+  const visibleColumnsCount = isMobileScreen
+    ? 2
+    : Math.max(4, Math.floor((screenWidth - 215) / 114));
   const rawRightWidth = Math.max(200, Math.floor(screenWidth - (isMobileScreen ? 136 : 215)));
   const monthColWidth = Math.floor(rawRightWidth / visibleColumnsCount);
   const exactRightViewportWidth = monthColWidth * visibleColumnsCount;
   const descColWidth = Math.max(120, Math.floor(screenWidth) - exactRightViewportWidth);
 
-  // প্রতিটি মাস কলামের শুরু অফসেট (Grid Snap Points)
   const gridSnapOffsets = useMemo(() => {
     const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
     const offsets: number[] = [];
@@ -260,6 +260,7 @@ export default function IncomeSheetScreen() {
 
   const monthScrollRef = useRef<ScrollView | null>(null);
   const initialScrollDoneRef = useRef<boolean>(false);
+  const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeGridIndex, setActiveGridIndex] = useState<number>(0);
 
   const getInitialFiscalStartYear = () => {
@@ -324,7 +325,7 @@ export default function IncomeSheetScreen() {
     [monthColWidth, visibleColumnsCount]
   );
 
-  // শুরুতে Current Month গ্রিডের প্রথম কলামে এনে বসিয়ে দেওয়া
+  // শুরুতে Current Month (ও তার পাশে Next Month) গ্রিডের প্রথম কলামে এনে বসিয়ে দেওয়া
   useEffect(() => {
     if (!initialScrollDoneRef.current && monthColWidth > 0) {
       initialScrollDoneRef.current = true;
@@ -346,19 +347,46 @@ export default function IncomeSheetScreen() {
     }
   };
 
-  // স্লাইড শেষ হলে ঠিক গ্রিড লাইনে স্ন্যাপ নিশ্চিত করা
+  // স্লো-মোশন বা ধীরে স্লাইড করলেও যেন প্রতিটি মাস পুরোপুরি গ্রিডে স্ন্যাপ করে সামনে বা পেছনে যায়
+  const scheduleGridSnapFromOffset = useCallback(
+    (offsetX: number) => {
+      if (snapTimerRef.current) {
+        clearTimeout(snapTimerRef.current);
+      }
+      snapTimerRef.current = setTimeout(() => {
+        if (monthColWidth <= 0) return;
+        const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+        const rawRatio = offsetX / monthColWidth;
+        const targetIdx = Math.max(0, Math.min(maxStartIndex, Math.round(rawRatio)));
+        setActiveGridIndex(targetIdx);
+
+        const exactTargetX = targetIdx * monthColWidth;
+        if (Math.abs(offsetX - exactTargetX) > 0.5) {
+          monthScrollRef.current?.scrollTo({
+            x: exactTargetX,
+            animated: true,
+          });
+        }
+      }, 90);
+    },
+    [monthColWidth, visibleColumnsCount]
+  );
+
+  const handleGridScroll = (event: any) => {
+    const offsetX = event?.nativeEvent?.contentOffset?.x || 0;
+    scheduleGridSnapFromOffset(offsetX);
+  };
+
   const handleGridScrollEnd = (event: any) => {
     const offsetX = event?.nativeEvent?.contentOffset?.x || 0;
-    const nearestIdx = Math.round(offsetX / monthColWidth);
-    const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
-    const clampedIdx = Math.max(0, Math.min(maxStartIndex, nearestIdx));
-    setActiveGridIndex(clampedIdx);
-
-    const exactX = clampedIdx * monthColWidth;
-    if (Math.abs(offsetX - exactX) > 1 && monthScrollRef.current) {
-      monthScrollRef.current.scrollTo({ x: exactX, animated: true });
-    }
+    scheduleGridSnapFromOffset(offsetX);
   };
+
+  useEffect(() => {
+    return () => {
+      if (snapTimerRef.current) clearTimeout(snapTimerRef.current);
+    };
+  }, []);
 
   const saveRowsForFiscalYear = useCallback(
     async (startYr: number, updatedRows: IncomeRow[]) => {
@@ -902,7 +930,6 @@ export default function IncomeSheetScreen() {
           <Text style={styles.addBtnText}>Hidden ({hiddenRows.length})</Text>
         </TouchableOpacity>
 
-        {/* Grid Step Left/Right Buttons */}
         <View style={styles.gridStepGroup}>
           <TouchableOpacity
             style={styles.gridStepBtn}
@@ -919,7 +946,7 @@ export default function IncomeSheetScreen() {
         </View>
       </View>
 
-      {/* Fixed Description Column + Exact Grid-Snapped Month Columns */}
+      {/* Fixed Description Column + Slow-Slide Safe Grid-Snap Months */}
       <ScrollView style={styles.verticalScroll}>
         <View style={styles.sheetWrapper}>
           {/* Left Fixed Description Column */}
@@ -990,7 +1017,7 @@ export default function IncomeSheetScreen() {
             </View>
           </View>
 
-          {/* Right Exact-Grid Viewport (কখনো ডানে/বামে আংশিক মাস কাটা থাকবে না) */}
+          {/* Right Exact-Grid Viewport */}
           <View style={{ width: exactRightViewportWidth, overflow: 'hidden' }}>
             <ScrollView
               ref={monthScrollRef}
@@ -1000,6 +1027,8 @@ export default function IncomeSheetScreen() {
               snapToAlignment="start"
               decelerationRate="fast"
               disableIntervalMomentum={true}
+              scrollEventThrottle={16}
+              onScroll={handleGridScroll}
               onMomentumScrollEnd={handleGridScrollEnd}
               onScrollEndDrag={handleGridScrollEnd}
             >

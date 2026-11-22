@@ -14,11 +14,11 @@
       },
       "oauth_client": [
         {
-          "client_id": "659773105401-loc8eht4b599dqg0ks02bl0lplujjauj.apps.googleusercontent.com",
+          "client_id": "659773105401-087ln1bgra2mtj30cgdd58mtl10knuo3.apps.googleusercontent.com",
           "client_type": 1,
           "android_info": {
             "package_name": "com.fmfiroz.MyBudgetApp",
-            "certificate_hash": "15c78d9643b4d4463fecf046f7be1e72a69842f6"
+            "certificate_hash": "b4160b9fda42999a1b50d8a10c9de0a796174b84"
           }
         },
         {

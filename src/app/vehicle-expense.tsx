@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
+  KeyboardAvoidingView,
   Modal,
   Platform,
   SafeAreaView,
@@ -40,6 +41,14 @@ interface PurchasedPartItem {
   brand?: string;
   quantity: number;
   price: number;
+}
+
+interface SavedItemTemplate {
+  name: string;
+  brand?: string;
+  quantity: number;
+  price: number;
+  usedAt: number;
 }
 
 interface VehicleLogEntry {
@@ -81,6 +90,7 @@ interface ComputedRow {
 }
 
 const STORAGE_KEY = '@vehicle_logsheet_table_v7';
+const SAVED_ITEMS_KEY = '@vehicle_saved_items_v1';
 
 const VEHICLE_CATEGORIES: VehicleCategory[] = [
   'Bike',
@@ -113,12 +123,15 @@ const fmtFixed = (val: number | null | undefined, decimals = 2): string => {
   return val.toFixed(decimals);
 };
 
+const formatDateParts = (day: number, month: number, year: number): string => {
+  const d = String(day).padStart(2, '0');
+  const m = String(month).padStart(2, '0');
+  return `${d}/${m}/${year}`;
+};
+
 const getTodayDDMMYYYY = (): string => {
   const now = new Date();
-  const d = String(now.getDate()).padStart(2, '0');
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const y = now.getFullYear();
-  return `${d}/${m}/${y}`;
+  return formatDateParts(now.getDate(), now.getMonth() + 1, now.getFullYear());
 };
 
 const parseDDMMYYYY = (dateStr: string): Date | null => {
@@ -135,6 +148,10 @@ const parseDDMMYYYY = (dateStr: string): Date | null => {
     return null;
   }
   return dt;
+};
+
+const getDaysInMonth = (month: number, year: number): number => {
+  return new Date(year, month, 0).getDate();
 };
 
 const diffDaysBetween = (startStr: string, endStr: string): number | null => {
@@ -165,6 +182,8 @@ export default function VehicleExpenseScreen() {
     entries: [],
   });
 
+  const [savedItemMemory, setSavedItemMemory] = useState<SavedItemTemplate[]>([]);
+
   // Add/Edit Entry Modal
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -174,6 +193,18 @@ export default function VehicleExpenseScreen() {
   const [finishDateInput, setFinishDateInput] = useState<string>(getTodayDDMMYYYY());
   const [finishReadingInput, setFinishReadingInput] = useState<string>('');
   const [finishNotesInput, setFinishNotesInput] = useState<string>('');
+
+  // Safe Cancel Pending Finish Modal
+  const [cancelPendingModalVisible, setCancelPendingModalVisible] = useState(false);
+  const [cancelPendingCooldown, setCancelPendingCooldown] = useState<number>(0);
+  const cancelPendingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Date Picker Modal
+  const [datePickerVisible, setDatePickerVisible] = useState(false);
+  const [datePickerTarget, setDatePickerTarget] = useState<'entry' | 'finish'>('entry');
+  const [pickerYear, setPickerYear] = useState<number>(new Date().getFullYear());
+  const [pickerMonth, setPickerMonth] = useState<number>(new Date().getMonth() + 1);
+  const [pickerDay, setPickerDay] = useState<number>(new Date().getDate());
 
   // Add Vehicle Modal
   const [vehicleModalVisible, setVehicleModalVisible] = useState(false);
@@ -211,7 +242,6 @@ export default function VehicleExpenseScreen() {
   const [partQtyInput, setPartQtyInput] = useState<string>('1');
   const [partPriceInput, setPartPriceInput] = useState<string>('');
 
-  // GO_BACK ওয়ার্নিং এড়াতে নিরাপদ ব্যাক হ্যান্ডলার
   const handleBackPress = useCallback(() => {
     try {
       if (router.canGoBack()) {
@@ -227,7 +257,11 @@ export default function VehicleExpenseScreen() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const raw = await AsyncStorage.getItem(STORAGE_KEY);
+        const [raw, rawItems] = await Promise.all([
+          AsyncStorage.getItem(STORAGE_KEY),
+          AsyncStorage.getItem(SAVED_ITEMS_KEY),
+        ]);
+
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<VehicleStoreData>;
           const loadedVehicles = Array.isArray(parsed.vehicles) ? parsed.vehicles : [];
@@ -247,6 +281,13 @@ export default function VehicleExpenseScreen() {
             entries: Array.isArray(parsed.entries) ? parsed.entries : [],
           });
         }
+
+        if (rawItems) {
+          const parsedItems = JSON.parse(rawItems);
+          if (Array.isArray(parsedItems)) {
+            setSavedItemMemory(parsedItems);
+          }
+        }
       } catch (e) {
         console.log('Failed to load vehicle log data:', e);
       }
@@ -259,6 +300,9 @@ export default function VehicleExpenseScreen() {
       if (cooldownTimerRef.current) {
         clearInterval(cooldownTimerRef.current);
       }
+      if (cancelPendingTimerRef.current) {
+        clearInterval(cancelPendingTimerRef.current);
+      }
     };
   }, []);
 
@@ -270,6 +314,62 @@ export default function VehicleExpenseScreen() {
       console.log('Failed to save vehicle log data:', e);
     }
   }, []);
+
+  const persistSavedItemMemory = useCallback(async (items: SavedItemTemplate[]) => {
+    setSavedItemMemory(items);
+    try {
+      await AsyncStorage.setItem(SAVED_ITEMS_KEY, JSON.stringify(items));
+    } catch (e) {
+      console.log('Failed to save item memory:', e);
+    }
+  }, []);
+
+  const recordItemToMemory = useCallback(
+    async (part: PurchasedPartItem) => {
+      const keyName = part.name.trim().toLowerCase();
+      const keyBrand = (part.brand || '').trim().toLowerCase();
+      const filtered = savedItemMemory.filter(
+        (m) =>
+          !(
+            m.name.trim().toLowerCase() === keyName &&
+            (m.brand || '').trim().toLowerCase() === keyBrand
+          )
+      );
+      const nextMemory: SavedItemTemplate[] = [
+        {
+          name: part.name.trim(),
+          brand: part.brand?.trim() || undefined,
+          quantity: part.quantity,
+          price: part.price,
+          usedAt: Date.now(),
+        },
+        ...filtered,
+      ].slice(0, 30);
+      await persistSavedItemMemory(nextMemory);
+    },
+    [savedItemMemory, persistSavedItemMemory]
+  );
+
+  const openDatePicker = (target: 'entry' | 'finish', currentStr: string) => {
+    const parsed = parseDDMMYYYY(currentStr) || new Date();
+    setDatePickerTarget(target);
+    setPickerYear(parsed.getFullYear());
+    setPickerMonth(parsed.getMonth() + 1);
+    setPickerDay(parsed.getDate());
+    setDatePickerVisible(true);
+  };
+
+  const handleConfirmPickedDate = () => {
+    const maxDay = getDaysInMonth(pickerMonth, pickerYear);
+    const safeDay = Math.min(pickerDay, maxDay);
+    const formatted = formatDateParts(safeDay, pickerMonth, pickerYear);
+    if (datePickerTarget === 'finish') {
+      setFinishDateInput(formatted);
+    } else {
+      setDateInput(formatted);
+    }
+    setDatePickerVisible(false);
+  };
 
   const activeVehicle = useMemo(() => {
     if (!store.selectedVehicleId) return null;
@@ -369,13 +469,45 @@ export default function VehicleExpenseScreen() {
     setFinishModalVisible(false);
   };
 
-  const handleClearPendingFinish = async () => {
-    if (!activeVehicle) return;
+  const requestCancelPendingFinish = () => {
+    if (!activeVehicle || !activePendingFuel) return;
+    if (cancelPendingTimerRef.current) {
+      clearInterval(cancelPendingTimerRef.current);
+    }
+    setCancelPendingModalVisible(true);
+    setCancelPendingCooldown(2);
+    cancelPendingTimerRef.current = setInterval(() => {
+      setCancelPendingCooldown((prev) => {
+        if (prev <= 1) {
+          if (cancelPendingTimerRef.current) {
+            clearInterval(cancelPendingTimerRef.current);
+            cancelPendingTimerRef.current = null;
+          }
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const closeCancelPendingModal = () => {
+    if (cancelPendingTimerRef.current) {
+      clearInterval(cancelPendingTimerRef.current);
+      cancelPendingTimerRef.current = null;
+    }
+    setCancelPendingModalVisible(false);
+    setCancelPendingCooldown(0);
+  };
+
+  const handleConfirmClearPendingFinish = async () => {
+    if (!activeVehicle || cancelPendingCooldown > 0) return;
+    const vehId = activeVehicle.id;
+    closeCancelPendingModal();
     await saveStore({
       ...store,
       pendingFuelByVehicle: {
         ...store.pendingFuelByVehicle,
-        [activeVehicle.id]: null,
+        [vehId]: null,
       },
     });
   };
@@ -406,7 +538,15 @@ export default function VehicleExpenseScreen() {
     setShowItemSubForm(false);
   };
 
-  const handleAddServiceItem = () => {
+  const handleSelectMemoryItem = (tpl: SavedItemTemplate) => {
+    setShowItemSubForm(true);
+    setPartNameInput(tpl.name);
+    setPartBrandInput(tpl.brand || '');
+    setPartQtyInput(String(tpl.quantity || 1));
+    setPartPriceInput(tpl.price > 0 ? String(tpl.price) : '');
+  };
+
+  const handleAddServiceItem = async () => {
     if (!partNameInput.trim()) {
       Alert.alert('তথ্য অসম্পূর্ণ', 'অনুগ্রহ করে Item-এর নাম লিখুন।');
       return;
@@ -427,6 +567,7 @@ export default function VehicleExpenseScreen() {
     };
 
     setServiceItems((prev) => [...prev, newPart]);
+    await recordItemToMemory(newPart);
     resetItemSubForm();
   };
 
@@ -438,13 +579,14 @@ export default function VehicleExpenseScreen() {
     if (!activeVehicle) return;
     setEditingId(null);
     setKind(defaultKind);
-    setDateInput(getTodayDDMMYYYY());
 
     const lastFuel = [...vehicleEntries].reverse().find((e) => e.kind === 'fuel');
     if (defaultKind === 'fuel' && activePendingFuel) {
+      setDateInput(activePendingFuel.date || getTodayDDMMYYYY());
       setReadingInput(String(activePendingFuel.reading));
       setNotesInput(activePendingFuel.notes || '');
     } else {
+      setDateInput(getTodayDDMMYYYY());
       setReadingInput('');
       setNotesInput('');
     }
@@ -604,6 +746,10 @@ export default function VehicleExpenseScreen() {
         createdAt: existingEntry ? existingEntry.createdAt : Date.now(),
       };
 
+      for (const part of serviceItems) {
+        await recordItemToMemory(part);
+      }
+
       const nextEntries = editingId
         ? store.entries.map((e) => (e.id === editingId ? record : e))
         : [...store.entries, record];
@@ -686,7 +832,7 @@ export default function VehicleExpenseScreen() {
     return e.date;
   };
 
-  const { computedRows, averageSummary, targetInfo } = useMemo(() => {
+  const { displayRows, averageSummary, targetInfo } = useMemo(() => {
     const fuelEntries = vehicleEntries.filter((e) => e.kind === 'fuel');
     const prevFuelById = new Map<string, VehicleLogEntry>();
     for (let i = 1; i < fuelEntries.length; i++) {
@@ -836,8 +982,11 @@ export default function VehicleExpenseScreen() {
         ? Math.round(baseReadingForTarget + estimatedRangeKm)
         : null;
 
+    // বর্তমান এন্ট্রিগুলো সবার উপরে/সামনে দেখানোর জন্য ক্রম উল্টানো হয়েছে
+    const newestFirstRows = [...rowsWithCalc].reverse();
+
     return {
-      computedRows: rowsWithCalc,
+      displayRows: newestFirstRows,
       averageSummary: {
         readingRangeText,
         totalReadingDiff,
@@ -864,6 +1013,11 @@ export default function VehicleExpenseScreen() {
   }, [vehicleEntries, activePendingFuel]);
 
   const canConfirmDelete = deleteChecked && deleteCooldown === 0;
+  const maxPickerDays = getDaysInMonth(pickerMonth, pickerYear);
+  const pickerDaysArray = Array.from({ length: maxPickerDays }, (_, i) => i + 1);
+  const pickerMonthsArray = Array.from({ length: 12 }, (_, i) => i + 1);
+  const currentYear = new Date().getFullYear();
+  const pickerYearsArray = Array.from({ length: 12 }, (_, i) => currentYear - 8 + i);
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -953,18 +1107,23 @@ export default function VehicleExpenseScreen() {
                   ⏳ Fuel Finish Reading: {activePendingFuel.reading} km ({activePendingFuel.date})
                 </Text>
                 <Text style={styles.pendingSub}>
-                  "+ Fuel (Load)" চাপলে Reading ঘরে {activePendingFuel.reading} অটো বসে যাবে।
+                  "+ Fuel (Load)" চাপলে Date ও Reading দুটোই অটো বসে যাবে।
                 </Text>
               </View>
-              <TouchableOpacity onPress={handleClearPendingFinish} style={styles.pendingClearBtn}>
+              <TouchableOpacity
+                onPress={requestCancelPendingFinish}
+                style={styles.pendingClearBtn}
+              >
+                <Ionicons name="lock-closed-outline" size={12} color="#92400E" />
                 <Text style={styles.pendingClearText}>বাতিল</Text>
               </TouchableOpacity>
             </View>
           )}
 
+          {/* Target Card with High-Contrast Text */}
           <View style={styles.targetCard}>
             <View style={styles.targetHeader}>
-              <Ionicons name="flag-outline" size={16} color="#1D4ED8" />
+              <Ionicons name="flag" size={16} color="#FFFFFF" />
               <Text style={styles.targetTitle}>TARGET (পরবর্তী রিফুয়েলিং পূর্বাভাস)</Text>
             </View>
             {targetInfo.nextTargetReading !== null ? (
@@ -986,7 +1145,7 @@ export default function VehicleExpenseScreen() {
                   </Text>
                 </View>
                 <View style={[styles.targetItem, styles.targetHighlightBox]}>
-                  <Text style={styles.targetLabel}>Target Reading</Text>
+                  <Text style={styles.targetHighlightLabel}>Target Reading</Text>
                   <Text style={styles.targetHighlightVal}>{targetInfo.nextTargetReading} km</Text>
                 </View>
               </View>
@@ -1009,7 +1168,7 @@ export default function VehicleExpenseScreen() {
             </TouchableOpacity>
           </View>
 
-          <ScrollView style={styles.verticalScroll}>
+          <ScrollView style={styles.verticalScroll} keyboardShouldPersistTaps="handled">
             <ScrollView horizontal showsHorizontalScrollIndicator={true}>
               <View style={styles.tableContainer}>
                 <View style={[styles.tableRow, styles.avgRow]}>
@@ -1109,17 +1268,18 @@ export default function VehicleExpenseScreen() {
                   </View>
                 </View>
 
-                {computedRows.length === 0 ? (
+                {displayRows.length === 0 ? (
                   <View style={styles.emptyRow}>
                     <Text style={styles.emptyText}>
                       কোনো এন্ট্রি নেই। Fuel Finish Reading, + Fuel (Load) বা + Servicing চাপুন।
                     </Text>
                   </View>
                 ) : (
-                  computedRows.map((row, index) => {
+                  displayRows.map((row, index) => {
                     const { entry, itemsTotalCost } = row;
                     const effReading = getEffectiveReading(entry);
                     const effDate = getEffectiveDate(entry);
+                    const isLatest = index === 0;
                     const itemsLabel =
                       entry.kind === 'maintenance' && entry.purchasedItems.length > 0
                         ? entry.purchasedItems
@@ -1137,10 +1297,12 @@ export default function VehicleExpenseScreen() {
                           styles.tableRow,
                           index % 2 === 1 && styles.zebraRow,
                           entry.kind === 'maintenance' && styles.nonFuelRow,
+                          isLatest && styles.latestRowHighlight,
                         ]}
                       >
                         <View style={[styles.cell, styles.colDate]}>
                           <Text style={styles.cellText}>{effDate}</Text>
+                          {isLatest && <Text style={styles.latestBadge}>বর্তমান</Text>}
                         </View>
                         <View style={[styles.cell, styles.colReading]}>
                           <Text style={styles.cellTextNum}>
@@ -1223,126 +1385,278 @@ export default function VehicleExpenseScreen() {
         </>
       )}
 
-      {/* Fuel Finish Reading Modal */}
-      <Modal visible={finishModalVisible} transparent animationType="fade">
+      {/* Safe Cancel Pending Finish Modal */}
+      <Modal visible={cancelPendingModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>⏱ Fuel Finish Reading সেভ করুন</Text>
-            <Text style={styles.helperNote}>
-              তেল শেষ হওয়ার Date ও Reading সেভ করে রাখুন। পরে "+ Fuel (Load)" খুললে এই Reading অটো বসে যাবে।
+            <View style={styles.deleteHeaderRow}>
+              <Ionicons name="alert-circle-outline" size={22} color="#D97706" />
+              <Text style={[styles.deleteModalTitle, { color: '#92400E' }]}>
+                Pending Finish Reading বাতিল করবেন?
+              </Text>
+            </View>
+            <Text style={styles.deleteWarningText}>
+              ভুল চাপে যেন মুছে না যায় সেজন্য নিশ্চিত করুন। বাতিল করলে সেভ করা Finish Reading ({activePendingFuel?.reading} km) মুছে যাবে।
             </Text>
-
-            <Text style={styles.label}>Date (DD/MM/YYYY)</Text>
-            <TextInput
-              style={styles.input}
-              value={finishDateInput}
-              onChangeText={setFinishDateInput}
-              placeholder="22/11/2026"
-            />
-
-            <Text style={styles.label}>Meter Reading (0 বা তার বেশি) *</Text>
-            <TextInput
-              style={styles.input}
-              keyboardType="numeric"
-              value={finishReadingInput}
-              onChangeText={setFinishReadingInput}
-              placeholder="যেমন: 6265"
-            />
-
-            <Text style={styles.label}>নোট (ঐচ্ছিক)</Text>
-            <TextInput
-              style={styles.input}
-              value={finishNotesInput}
-              onChangeText={setFinishNotesInput}
-              placeholder="যেমন: Reserve-e porlo"
-            />
-
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
-                onPress={() => setFinishModalVisible(false)}
+                onPress={closeCancelPendingModal}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>রাখুন</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalBtn, { backgroundColor: '#D97706' }]}
-                onPress={handleSaveFinishReading}
+                disabled={cancelPendingCooldown > 0}
+                style={[
+                  styles.modalBtn,
+                  {
+                    backgroundColor: cancelPendingCooldown > 0 ? '#FCD34D' : '#D97706',
+                  },
+                ]}
+                onPress={handleConfirmClearPendingFinish}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Reading সেভ করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                  {cancelPendingCooldown > 0
+                    ? `অপেক্ষা করুন (${cancelPendingCooldown}s)`
+                    : 'হ্যাঁ, বাতিল করুন'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Add Vehicle Modal */}
-      <Modal visible={vehicleModalVisible} transparent animationType="fade">
+      {/* Date Picker Modal */}
+      <Modal visible={datePickerVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>নতুন Vehicle যোগ করুন</Text>
+            <Text style={styles.modalTitle}>📅 তারিখ নির্বাচন করুন (DD/MM/YYYY)</Text>
 
-            <Text style={styles.label}>Vehicle Name *</Text>
-            <TextInput
-              style={styles.input}
-              value={vehNameInput}
-              onChangeText={setVehNameInput}
-              placeholder="যেমন: Apache RTR, Toyota Allion"
-            />
+            <View style={styles.pickerColsRow}>
+              <View style={styles.pickerCol}>
+                <Text style={styles.pickerColLabel}>দিন</Text>
+                <ScrollView style={styles.pickerList} nestedScrollEnabled>
+                  {pickerDaysArray.map((d) => (
+                    <TouchableOpacity
+                      key={d}
+                      style={[styles.pickerOption, pickerDay === d && styles.pickerOptionActive]}
+                      onPress={() => setPickerDay(d)}
+                    >
+                      <Text
+                        style={[
+                          styles.pickerOptionText,
+                          pickerDay === d && styles.pickerOptionTextActive,
+                        ]}
+                      >
+                        {String(d).padStart(2, '0')}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
 
-            <Text style={styles.label}>ধরন (Bike / Car / Other)</Text>
-            <View style={styles.catChipsWrap}>
-              {VEHICLE_CATEGORIES.map((cat) => {
-                const active = vehCategoryInput === cat;
-                return (
-                  <TouchableOpacity
-                    key={cat}
-                    style={[styles.catChip, active && styles.catChipActive]}
-                    onPress={() => setVehCategoryInput(cat)}
-                  >
-                    <Text style={[styles.catChipText, active && styles.catChipTextActive]}>
-                      {cat}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
+              <View style={styles.pickerCol}>
+                <Text style={styles.pickerColLabel}>মাস</Text>
+                <ScrollView style={styles.pickerList} nestedScrollEnabled>
+                  {pickerMonthsArray.map((m) => (
+                    <TouchableOpacity
+                      key={m}
+                      style={[styles.pickerOption, pickerMonth === m && styles.pickerOptionActive]}
+                      onPress={() => setPickerMonth(m)}
+                    >
+                      <Text
+                        style={[
+                          styles.pickerOptionText,
+                          pickerMonth === m && styles.pickerOptionTextActive,
+                        ]}
+                      >
+                        {String(m).padStart(2, '0')}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+
+              <View style={styles.pickerCol}>
+                <Text style={styles.pickerColLabel}>বছর</Text>
+                <ScrollView style={styles.pickerList} nestedScrollEnabled>
+                  {pickerYearsArray.map((y) => (
+                    <TouchableOpacity
+                      key={y}
+                      style={[styles.pickerOption, pickerYear === y && styles.pickerOptionActive]}
+                      onPress={() => setPickerYear(y)}
+                    >
+                      <Text
+                        style={[
+                          styles.pickerOptionText,
+                          pickerYear === y && styles.pickerOptionTextActive,
+                        ]}
+                      >
+                        {y}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
             </View>
-
-            {vehCategoryInput === 'Other' && (
-              <>
-                <Text style={styles.label}>অন্য ধরন লিখুন *</Text>
-                <TextInput
-                  style={styles.input}
-                  value={vehCustomCategoryInput}
-                  onChangeText={setVehCustomCategoryInput}
-                  placeholder="যেমন: CNG, Microbus, Boat"
-                />
-              </>
-            )}
-
-            <Text style={styles.label}>রেজিস্ট্রেশন / নম্বর (ঐচ্ছিক)</Text>
-            <TextInput
-              style={styles.input}
-              value={vehRegNoInput}
-              onChangeText={setVehRegNoInput}
-              placeholder="যেমন: Rajshahi Metro-La-12-3456"
-            />
 
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
-                onPress={() => setVehicleModalVisible(false)}
+                onPress={() => setDatePickerVisible(false)}
               >
                 <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleAddVehicle}
+                onPress={handleConfirmPickedDate}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Vehicle যোগ করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>তারিখ বসান</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
+      </Modal>
+
+      {/* Fuel Finish Reading Modal */}
+      <Modal visible={finishModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={styles.modalCard}>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalTitle}>⏱ Fuel Finish Reading সেভ করুন</Text>
+              <Text style={styles.helperNote}>
+                তেল শেষ হওয়ার Date ও Reading সেভ করে রাখুন। পরে "+ Fuel (Load)" খুললে Date ও Reading দুটোই অটো বসে যাবে।
+              </Text>
+
+              <Text style={styles.label}>Date (DD/MM/YYYY)</Text>
+              <View style={styles.dateInputRow}>
+                <TextInput
+                  style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                  value={finishDateInput}
+                  onChangeText={setFinishDateInput}
+                  placeholder="22/11/2026"
+                />
+                <TouchableOpacity
+                  style={styles.pickDateBtn}
+                  onPress={() => openDatePicker('finish', finishDateInput)}
+                >
+                  <Ionicons name="calendar-outline" size={16} color="#1D4ED8" />
+                  <Text style={styles.pickDateBtnText}>Pick Date</Text>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={[styles.label, { marginTop: 12 }]}>Meter Reading (0 বা তার বেশি) *</Text>
+              <TextInput
+                style={styles.input}
+                keyboardType="numeric"
+                value={finishReadingInput}
+                onChangeText={setFinishReadingInput}
+                placeholder="যেমন: 6265"
+              />
+
+              <Text style={styles.label}>নোট (ঐচ্ছিক)</Text>
+              <TextInput
+                style={styles.input}
+                value={finishNotesInput}
+                onChangeText={setFinishNotesInput}
+                placeholder="যেমন: Reserve-e porlo"
+              />
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                  onPress={() => setFinishModalVisible(false)}
+                >
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#D97706' }]}
+                  onPress={handleSaveFinishReading}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Reading সেভ করুন</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
+      {/* Add Vehicle Modal */}
+      <Modal visible={vehicleModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <View style={styles.modalCard}>
+            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+              <Text style={styles.modalTitle}>নতুন Vehicle যোগ করুন</Text>
+
+              <Text style={styles.label}>Vehicle Name *</Text>
+              <TextInput
+                style={styles.input}
+                value={vehNameInput}
+                onChangeText={setVehNameInput}
+                placeholder="যেমন: Apache RTR, Toyota Allion"
+              />
+
+              <Text style={styles.label}>ধরন (Bike / Car / Other)</Text>
+              <View style={styles.catChipsWrap}>
+                {VEHICLE_CATEGORIES.map((cat) => {
+                  const active = vehCategoryInput === cat;
+                  return (
+                    <TouchableOpacity
+                      key={cat}
+                      style={[styles.catChip, active && styles.catChipActive]}
+                      onPress={() => setVehCategoryInput(cat)}
+                    >
+                      <Text style={[styles.catChipText, active && styles.catChipTextActive]}>
+                        {cat}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              {vehCategoryInput === 'Other' && (
+                <>
+                  <Text style={styles.label}>অন্য ধরন লিখুন *</Text>
+                  <TextInput
+                    style={styles.input}
+                    value={vehCustomCategoryInput}
+                    onChangeText={setVehCustomCategoryInput}
+                    placeholder="যেমন: CNG, Microbus, Boat"
+                  />
+                </>
+              )}
+
+              <Text style={styles.label}>রেজিস্ট্রেশন / নম্বর (ঐচ্ছিক)</Text>
+              <TextInput
+                style={styles.input}
+                value={vehRegNoInput}
+                onChangeText={setVehRegNoInput}
+                placeholder="যেমন: Rajshahi Metro-La-12-3456"
+              />
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                  onPress={() => setVehicleModalVisible(false)}
+                >
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
+                  onPress={handleAddVehicle}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Vehicle যোগ করুন</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Safe Delete Confirmation Modal */}
@@ -1433,9 +1747,16 @@ export default function VehicleExpenseScreen() {
 
       {/* Add / Edit Entry Modal */}
       <Modal visible={modalVisible} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
           <View style={styles.modalCard}>
-            <ScrollView showsVerticalScrollIndicator={false}>
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 24 }}
+            >
               <Text style={styles.modalTitle}>
                 {editingId ? 'এন্ট্রি আপডেট করুন' : 'নতুন হিসাব যোগ করুন'}
               </Text>
@@ -1464,31 +1785,35 @@ export default function VehicleExpenseScreen() {
                 <>
                   {!editingId && activePendingFuel && (
                     <Text style={styles.autoFillNote}>
-                      ✓ Finish Reading ({activePendingFuel.reading} km, {activePendingFuel.date}) Reading ঘরে অটো বসানো হয়েছে।
+                      ✓ Finish Reading ({activePendingFuel.reading} km) ও Date ({activePendingFuel.date}) অটো বসানো হয়েছে।
                     </Text>
                   )}
 
-                  <View style={styles.rowGap}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.label}>Fuel Load Date</Text>
-                      <TextInput
-                        style={styles.input}
-                        value={dateInput}
-                        onChangeText={setDateInput}
-                        placeholder="22/11/2026"
-                      />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.label}>Reading (0 বা তার বেশি)</Text>
-                      <TextInput
-                        style={styles.input}
-                        keyboardType="numeric"
-                        value={readingInput}
-                        onChangeText={setReadingInput}
-                        placeholder="0 বা 6265"
-                      />
-                    </View>
+                  <Text style={styles.label}>Fuel Load Date (DD/MM/YYYY)</Text>
+                  <View style={styles.dateInputRow}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      value={dateInput}
+                      onChangeText={setDateInput}
+                      placeholder="22/11/2026"
+                    />
+                    <TouchableOpacity
+                      style={styles.pickDateBtn}
+                      onPress={() => openDatePicker('entry', dateInput)}
+                    >
+                      <Ionicons name="calendar-outline" size={16} color="#1D4ED8" />
+                      <Text style={styles.pickDateBtnText}>Pick Date</Text>
+                    </TouchableOpacity>
                   </View>
+
+                  <Text style={[styles.label, { marginTop: 12 }]}>Reading (0 বা তার বেশি)</Text>
+                  <TextInput
+                    style={styles.input}
+                    keyboardType="numeric"
+                    value={readingInput}
+                    onChangeText={setReadingInput}
+                    placeholder="0 বা 6265"
+                  />
 
                   <View style={styles.rowGap}>
                     <View style={{ flex: 1 }}>
@@ -1533,14 +1858,23 @@ export default function VehicleExpenseScreen() {
               ) : (
                 <>
                   <Text style={styles.label}>Date (DD/MM/YYYY)</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={dateInput}
-                    onChangeText={setDateInput}
-                    placeholder="22/11/2026"
-                  />
+                  <View style={styles.dateInputRow}>
+                    <TextInput
+                      style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                      value={dateInput}
+                      onChangeText={setDateInput}
+                      placeholder="22/11/2026"
+                    />
+                    <TouchableOpacity
+                      style={styles.pickDateBtn}
+                      onPress={() => openDatePicker('entry', dateInput)}
+                    >
+                      <Ionicons name="calendar-outline" size={16} color="#1D4ED8" />
+                      <Text style={styles.pickDateBtnText}>Pick Date</Text>
+                    </TouchableOpacity>
+                  </View>
 
-                  <Text style={styles.label}>Service Name</Text>
+                  <Text style={[styles.label, { marginTop: 12 }]}>Service Name</Text>
                   <TextInput
                     style={styles.input}
                     value={serviceNameInput}
@@ -1572,6 +1906,33 @@ export default function VehicleExpenseScreen() {
                         </TouchableOpacity>
                       )}
                     </View>
+
+                    {/* Saved Item Memory List - Tap anywhere to auto-fill */}
+                    {savedItemMemory.length > 0 && (
+                      <View style={styles.memoryBox}>
+                        <Text style={styles.memoryTitle}>
+                          আগের Item তালিকা (যেকোনো জায়গায় ক্লিক করলে অটো বসবে):
+                        </Text>
+                        {savedItemMemory.slice(0, 8).map((tpl, idx) => (
+                          <TouchableOpacity
+                            key={`${tpl.name}-${tpl.brand || ''}-${idx}`}
+                            style={styles.memoryRow}
+                            activeOpacity={0.7}
+                            onPress={() => handleSelectMemoryItem(tpl)}
+                          >
+                            <View style={{ flex: 1 }}>
+                              <Text style={styles.memoryItemName}>
+                                {tpl.name} {tpl.brand ? `(${tpl.brand})` : ''}
+                              </Text>
+                              <Text style={styles.memoryItemSub}>
+                                Qty: {tpl.quantity} • ৳{tpl.price.toFixed(2)}
+                              </Text>
+                            </View>
+                            <Ionicons name="arrow-down-circle-outline" size={18} color="#1D4ED8" />
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                    )}
 
                     {serviceItems.map((part) => (
                       <View key={part.id} style={styles.partRow}>
@@ -1679,7 +2040,7 @@ export default function VehicleExpenseScreen() {
               </View>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </SafeAreaView>
   );
@@ -1838,12 +2199,15 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   pendingClearBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
     borderRadius: 6,
     backgroundColor: '#FEF3C7',
     borderWidth: 1,
-    borderColor: '#FCD34D',
+    borderColor: '#D97706',
   },
   pendingClearText: {
     fontSize: 11,
@@ -1851,13 +2215,13 @@ const styles = StyleSheet.create({
     color: '#92400E',
   },
   targetCard: {
-    backgroundColor: '#EFF6FF',
+    backgroundColor: '#1E3A8A',
     marginHorizontal: 10,
     marginTop: 8,
     padding: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#93C5FD',
+    borderColor: '#1D4ED8',
   },
   targetHeader: {
     flexDirection: 'row',
@@ -1868,7 +2232,7 @@ const styles = StyleSheet.create({
   targetTitle: {
     fontSize: 12,
     fontWeight: '800',
-    color: '#1E3A8A',
+    color: '#FFFFFF',
   },
   targetGrid: {
     flexDirection: 'row',
@@ -1878,26 +2242,30 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFFFFF',
     paddingVertical: 6,
-    paddingHorizontal: 6,
+    paddingHorizontal: 5,
     borderRadius: 7,
-    borderWidth: 1,
-    borderColor: '#DBEAFE',
     alignItems: 'center',
   },
   targetHighlightBox: {
-    backgroundColor: '#1D4ED8',
-    borderColor: '#1D4ED8',
+    backgroundColor: '#0F172A',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
   },
   targetLabel: {
     fontSize: 9.5,
-    color: '#64748B',
-    fontWeight: '600',
+    color: '#475569',
+    fontWeight: '700',
   },
   targetVal: {
     fontSize: 11.5,
     fontWeight: '800',
     color: '#0F172A',
     marginTop: 2,
+  },
+  targetHighlightLabel: {
+    fontSize: 9.5,
+    color: '#DBEAFE',
+    fontWeight: '700',
   },
   targetHighlightVal: {
     fontSize: 12.5,
@@ -1906,8 +2274,9 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   targetEmptyText: {
-    fontSize: 11,
-    color: '#475569',
+    fontSize: 11.5,
+    color: '#F1F5F9',
+    lineHeight: 16,
   },
   quickBar: {
     flexDirection: 'row',
@@ -1959,7 +2328,7 @@ const styles = StyleSheet.create({
   tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    minHeight: 38,
+    minHeight: 40,
     borderBottomWidth: 1,
     borderBottomColor: '#CBD5E1',
   },
@@ -1977,15 +2346,25 @@ const styles = StyleSheet.create({
   nonFuelRow: {
     backgroundColor: '#F0FDF4',
   },
+  latestRowHighlight: {
+    backgroundColor: '#EFF6FF',
+  },
+  latestBadge: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#1D4ED8',
+    textAlign: 'center',
+    marginTop: 1,
+  },
   cell: {
     height: '100%',
-    minHeight: 38,
+    minHeight: 40,
     justifyContent: 'center',
     paddingHorizontal: 6,
     borderRightWidth: 1,
     borderRightColor: '#CBD5E1',
   },
-  colDate: { width: 100 },
+  colDate: { width: 102 },
   colReading: { width: 92 },
   colNum: { width: 78 },
   colService: { width: 145 },
@@ -2041,7 +2420,7 @@ const styles = StyleSheet.create({
   },
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
     justifyContent: 'center',
     padding: 16,
   },
@@ -2049,7 +2428,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: 12,
     padding: 18,
-    maxHeight: '90%',
+    maxHeight: '88%',
     maxWidth: 460,
     width: '100%',
     alignSelf: 'center',
@@ -2076,6 +2455,65 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 7,
     marginBottom: 10,
+  },
+  dateInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  pickDateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 11,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+  },
+  pickDateBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1D4ED8',
+  },
+  pickerColsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  pickerCol: {
+    flex: 1,
+  },
+  pickerColLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    textAlign: 'center',
+    marginBottom: 6,
+  },
+  pickerList: {
+    maxHeight: 170,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+  },
+  pickerOption: {
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  pickerOptionActive: {
+    backgroundColor: '#2563EB',
+  },
+  pickerOptionText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  pickerOptionTextActive: {
+    color: '#FFFFFF',
+    fontWeight: '700',
   },
   catChipsWrap: {
     flexDirection: 'row',
@@ -2227,6 +2665,42 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700',
+  },
+  memoryBox: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 8,
+    padding: 8,
+    marginBottom: 8,
+  },
+  memoryTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1E3A8A',
+    marginBottom: 6,
+  },
+  memoryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 7,
+    paddingHorizontal: 9,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+    marginBottom: 5,
+  },
+  memoryItemName: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#0F172A',
+  },
+  memoryItemSub: {
+    fontSize: 11,
+    color: '#475569',
+    marginTop: 1,
   },
   partRow: {
     flexDirection: 'row',

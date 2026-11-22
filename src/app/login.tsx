@@ -30,7 +30,7 @@ export default function LoginScreen() {
   useEffect(() => {
     GoogleSignin.configure({
       // Firebase Console -> Authentication -> Sign-in method -> Google থেকে পাওয়া Web client ID দিন
-      webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+      webClientId: '659773105401-2pb5ef8c61qem8gqg4k5dvkh0sfeltcq.apps.googleusercontent.com',
     });
   }, []);
 

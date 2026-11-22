@@ -30,7 +30,7 @@ export default function RootLayout() {
           <Stack.Screen name="welfare" options={{ headerShown: false }} />
           <Stack.Screen name="savings" options={{ headerShown: false }} />
           <Stack.Screen name="income" options={{ headerShown: false }} />
-          <Stack.Screen name="bike-expense" options={{ headerShown: false }} />
+          <Stack.Screen name="vehicle-expense" options={{ headerShown: false }} />
           <Stack.Screen name="reports" options={{ headerShown: false }} />
           <Stack.Screen name="settings" options={{ headerShown: false }} />
         </Stack>

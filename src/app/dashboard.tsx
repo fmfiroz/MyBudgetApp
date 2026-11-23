@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -15,6 +15,11 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth } from '../firebase';
+import {
+  AuthSessionState,
+  clearAllLocalUserFinanceData,
+  getAuthSession,
+} from '../utils/guestAuthSync';
 
 type AppLanguage = 'en' | 'bn';
 
@@ -29,6 +34,7 @@ export interface DashboardModuleItem {
 }
 
 const LANGUAGE_STORAGE_KEY = '@mybudget_app_language_v1';
+const SESSION_STORAGE_KEY = '@mybudget_auth_session_v1';
 export const DASHBOARD_ENABLED_MODULES_KEY = '@mybudget_dashboard_modules_v1';
 
 export const ALL_DASHBOARD_MODULES: DashboardModuleItem[] = [
@@ -97,7 +103,7 @@ export const ALL_DASHBOARD_MODULES: DashboardModuleItem[] = [
   },
   {
     id: 'vehicle-expense',
-    titleEn: 'Vehicle\'s Fuel & Maintenance Expense',
+    titleEn: "Vehicle's Fuel & Maintenance Expense",
     titleBn: 'যানবাহনের তেল ও রক্ষণাবেক্ষণ খরচ',
     icon: '🏍️',
     route: '/vehicle-expense',
@@ -125,15 +131,23 @@ export default function HomeScreen() {
   const [enabledModuleIds, setEnabledModuleIds] = useState<string[]>(
     DEFAULT_ENABLED_MODULE_IDS
   );
+  const [session, setSession] = useState<AuthSessionState>({
+    mode: null,
+    userId: null,
+    updatedAt: '',
+  });
   const [drawerVisible, setDrawerVisible] = useState<boolean>(false);
   const [loggingOut, setLoggingOut] = useState<boolean>(false);
 
   const loadDashboardPrefs = useCallback(async () => {
     try {
-      const [savedLang, savedModules] = await Promise.all([
+      const [savedLang, savedModules, currentSession] = await Promise.all([
         AsyncStorage.getItem(LANGUAGE_STORAGE_KEY),
         AsyncStorage.getItem(DASHBOARD_ENABLED_MODULES_KEY),
+        getAuthSession(),
       ]);
+
+      setSession(currentSession);
 
       if (savedLang === 'en' || savedLang === 'bn') {
         setLang(savedLang);
@@ -167,11 +181,17 @@ export default function HomeScreen() {
     return ALL_DASHBOARD_MODULES.filter((item) => idSet.has(item.id));
   }, [enabledModuleIds]);
 
+  const isGuestMode = !auth.currentUser && session.mode === 'guest';
+
   const performLogout = async () => {
     try {
       setLoggingOut(true);
       setDrawerVisible(false);
-      await signOut(auth);
+      await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+      if (auth.currentUser) {
+        await clearAllLocalUserFinanceData();
+        await signOut(auth);
+      }
       router.replace('/login');
     } catch (error: any) {
       const message = error?.message || 'Unable to logout.';
@@ -187,8 +207,11 @@ export default function HomeScreen() {
   const handleLogout = () => {
     if (loggingOut) return;
 
-    const confirmMsg =
-      lang === 'bn'
+    const confirmMsg = isGuestMode
+      ? lang === 'bn'
+        ? 'Guest সেশন থেকে বের হতে চান? (লোকাল ডেটা ফোনে সুরক্ষিত থাকবে)'
+        : 'Exit Guest session? (Your local data stays saved on this device)'
+      : lang === 'bn'
         ? 'আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?'
         : 'Are you sure you want to logout from your account?';
 
@@ -197,10 +220,10 @@ export default function HomeScreen() {
         performLogout();
       }
     } else {
-      Alert.alert('Logout', confirmMsg, [
+      Alert.alert(isGuestMode ? 'Exit Guest' : 'Logout', confirmMsg, [
         { text: lang === 'bn' ? 'বাতিল' : 'Cancel', style: 'cancel' },
         {
-          text: 'Logout',
+          text: isGuestMode ? 'Exit' : 'Logout',
           style: 'destructive',
           onPress: performLogout,
         },
@@ -208,7 +231,21 @@ export default function HomeScreen() {
     }
   };
 
-  const userEmail = auth.currentUser?.email || 'fmfiroznp@gmail.com';
+  const displayName = auth.currentUser?.displayName
+    ? auth.currentUser.displayName
+    : isGuestMode
+      ? lang === 'bn'
+        ? 'গেস্ট ইউজার'
+        : 'Guest User'
+      : 'Firoz Mahmud';
+
+  const displaySub = auth.currentUser?.email
+    ? auth.currentUser.email
+    : isGuestMode
+      ? lang === 'bn'
+        ? 'লোকাল স্টোরেজে সিঙ্ক হচ্ছে'
+        : 'Synced in Local Storage'
+      : 'fmfiroznp@gmail.com';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -227,7 +264,9 @@ export default function HomeScreen() {
           <Text style={styles.brandTitle}>
             {lang === 'bn' ? 'আমার বাজেট অ্যাপ' : 'MyBudgetApp'}
           </Text>
-          <Text style={styles.brandSubtitle}>Personal Finance Dashboard</Text>
+          <Text style={styles.brandSubtitle}>
+            {isGuestMode ? 'Guest Mode • Local Sync' : 'Personal Finance Dashboard'}
+          </Text>
         </View>
 
         <TouchableOpacity
@@ -240,6 +279,32 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+        {/* Guest Mode Banner to Register & Sync */}
+        {isGuestMode && (
+          <View style={styles.guestBannerCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.guestBannerTitle}>
+                {lang === 'bn'
+                  ? 'আপনি Guest Mode-এ আছেন'
+                  : 'You are using Guest Mode'}
+              </Text>
+              <Text style={styles.guestBannerDesc}>
+                {lang === 'bn'
+                  ? 'সব ডেটা লোকাল স্টোরেজে সেভ হচ্ছে। রেজিস্ট্রেশন করলে আপনার লোকাল ডেটা সিঙ্ক হয়ে যাবে।'
+                  : 'All data is saved locally. Register anytime to keep your local data synced.'}
+              </Text>
+            </View>
+            <TouchableOpacity
+              style={styles.guestRegisterBtn}
+              onPress={() => router.push('/register' as never)}
+            >
+              <Text style={styles.guestRegisterBtnText}>
+                {lang === 'bn' ? 'রেজিস্টার' : 'Register'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* Hero Banner Card */}
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
@@ -338,12 +403,29 @@ export default function HomeScreen() {
                   <Ionicons name="person" size={26} color="#FFFFFF" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.userNameText}>Firoz Mahmud</Text>
+                  <Text style={styles.userNameText}>{displayName}</Text>
                   <Text style={styles.userEmailText} numberOfLines={1}>
-                    {userEmail}
+                    {displaySub}
                   </Text>
                 </View>
               </View>
+
+              {isGuestMode && (
+                <TouchableOpacity
+                  style={styles.drawerRegisterBtn}
+                  onPress={() => {
+                    setDrawerVisible(false);
+                    router.push('/register' as never);
+                  }}
+                >
+                  <Ionicons name="person-add-outline" size={18} color="#FFFFFF" />
+                  <Text style={styles.drawerRegisterText}>
+                    {lang === 'bn'
+                      ? 'অ্যাকাউন্ট রেজিস্টার ও ডেটা সিঙ্ক করুন'
+                      : 'Register Account & Sync Data'}
+                  </Text>
+                </TouchableOpacity>
+              )}
 
               <View style={styles.infoSectionBox}>
                 <Text style={styles.infoSectionTitle}>
@@ -398,7 +480,11 @@ export default function HomeScreen() {
                     ? lang === 'bn'
                       ? 'লগআউট হচ্ছে...'
                       : 'Logging out...'
-                    : 'Logout'}
+                    : isGuestMode
+                      ? lang === 'bn'
+                        ? 'Guest থেকে বের হন'
+                        : 'Exit Guest'
+                      : 'Logout'}
                 </Text>
               </TouchableOpacity>
             </ScrollView>
@@ -466,6 +552,38 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 32,
     gap: 18,
+  },
+  guestBannerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#93C5FD',
+    borderRadius: 14,
+    padding: 14,
+  },
+  guestBannerTitle: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: '#1E3A8A',
+  },
+  guestBannerDesc: {
+    fontSize: 11.5,
+    color: '#334155',
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  guestRegisterBtn: {
+    backgroundColor: '#2563EB',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 9,
+  },
+  guestRegisterBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
   heroCard: {
     backgroundColor: '#0F172A',
@@ -571,7 +689,6 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '700',
   },
-
   drawerBackdrop: {
     flex: 1,
     flexDirection: 'row',
@@ -639,6 +756,21 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#475569',
     marginTop: 2,
+  },
+  drawerRegisterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#2563EB',
+    paddingVertical: 11,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  drawerRegisterText: {
+    color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 12.5,
   },
   infoSectionBox: {
     backgroundColor: '#F8FAFC',

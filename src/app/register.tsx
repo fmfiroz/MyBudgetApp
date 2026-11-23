@@ -1,20 +1,20 @@
-
 import { Link, useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { useState } from 'react';
+import React, { useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import { auth } from '../firebase';
+import { syncGuestLocalDataOnRegistration } from '../utils/guestAuthSync';
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -54,6 +54,13 @@ export default function RegisterScreen() {
         displayName: name.trim(),
       });
 
+      // Guest/Local অবস্থায় থাকা সব ডেটা নতুন রেজিস্টার্ড অ্যাকাউন্টের সাথে সিঙ্ক করা
+      await syncGuestLocalDataOnRegistration({
+        userId: credential.user.uid,
+        email: credential.user.email,
+        displayName: name.trim(),
+      });
+
       router.replace('/dashboard');
     } catch (error: any) {
       const messages: Record<string, string> = {
@@ -81,7 +88,9 @@ export default function RegisterScreen() {
         <View style={styles.card}>
           <Text style={styles.logo}>MyBudgetApp</Text>
           <Text style={styles.heading}>Create Account</Text>
-          <Text style={styles.subtitle}>Start managing your finances today.</Text>
+          <Text style={styles.subtitle}>
+            Start managing your finances today. Your local data will stay synced.
+          </Text>
 
           <Text style={styles.label}>Full Name</Text>
           <TextInput
@@ -135,13 +144,15 @@ export default function RegisterScreen() {
             {loading ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.buttonText}>Create Account</Text>
+              <Text style={styles.buttonText}>Create Account & Sync Data</Text>
             )}
           </TouchableOpacity>
 
           <View style={styles.loginRow}>
             <Text style={styles.normalText}>Already have an account? </Text>
-            <Link href="/login" style={styles.link}>Sign In</Link>
+            <Link href="/login" style={styles.link}>
+              Sign In
+            </Link>
           </View>
         </View>
       </ScrollView>
@@ -155,22 +166,34 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 22 },
   logo: { color: '#2563EB', fontSize: 24, fontWeight: 'bold', marginBottom: 25 },
   heading: { fontSize: 25, fontWeight: 'bold', color: '#172554' },
-  subtitle: { color: '#64748B', marginTop: 6, marginBottom: 20 },
+  subtitle: { color: '#64748B', marginTop: 6, marginBottom: 20, lineHeight: 20 },
   label: { color: '#334155', fontWeight: '600', marginTop: 14, marginBottom: 8 },
   input: {
-    height: 52, borderWidth: 1, borderColor: '#CBD5E1',
-    borderRadius: 10, paddingHorizontal: 14, color: '#111827',
+    height: 52,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    color: '#111827',
   },
   passwordBox: {
-    height: 52, borderWidth: 1, borderColor: '#CBD5E1',
-    borderRadius: 10, flexDirection: 'row', alignItems: 'center',
+    height: 52,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
     paddingHorizontal: 14,
   },
   passwordInput: { flex: 1, color: '#111827' },
   showText: { color: '#2563EB', fontWeight: '600', padding: 5 },
   button: {
-    height: 54, borderRadius: 12, backgroundColor: '#2563EB',
-    alignItems: 'center', justifyContent: 'center', marginTop: 28,
+    height: 54,
+    borderRadius: 12,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 28,
   },
   disabledButton: { opacity: 0.6 },
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },

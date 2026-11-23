@@ -2,7 +2,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { signOut } from 'firebase/auth';
+import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -137,8 +137,16 @@ export default function HomeScreen() {
     userId: null,
     updatedAt: '',
   });
+  const [authUser, setAuthUser] = useState<User | null>(auth.currentUser);
   const [drawerVisible, setDrawerVisible] = useState<boolean>(false);
   const [loggingOut, setLoggingOut] = useState<boolean>(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setAuthUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
 
   const loadDashboardPrefs = useCallback(async () => {
     try {
@@ -182,7 +190,7 @@ export default function HomeScreen() {
     return ALL_DASHBOARD_MODULES.filter((item) => idSet.has(item.id));
   }, [enabledModuleIds]);
 
-  const isGuestMode = !auth.currentUser && session.mode === 'guest';
+  const isGuestMode = !authUser && session.mode === 'guest';
 
   const performLogout = async () => {
     try {
@@ -242,21 +250,23 @@ export default function HomeScreen() {
     }
   };
 
-  const displayName = auth.currentUser?.displayName
-    ? auth.currentUser.displayName
-    : isGuestMode
+  const displayName =
+    authUser?.displayName ||
+    session.displayName ||
+    (isGuestMode
       ? lang === 'bn'
         ? 'গেস্ট ইউজার'
         : 'Guest User'
-      : 'Firoz Mahmud';
+      : authUser?.email?.split('@')[0] || 'User');
 
-  const displaySub = auth.currentUser?.email
-    ? auth.currentUser.email
-    : isGuestMode
+  const displaySub =
+    authUser?.email ||
+    session.email ||
+    (isGuestMode
       ? lang === 'bn'
         ? 'লোকাল স্টোরেজে সিঙ্ক হচ্ছে'
         : 'Synced in Local Storage'
-      : 'fmfiroznp@gmail.com';
+      : '');
 
   return (
     <SafeAreaView style={styles.container}>

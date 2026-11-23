@@ -1,6 +1,7 @@
+
 import { Link, useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,7 +15,11 @@ import {
   View,
 } from 'react-native';
 import { auth } from '../firebase';
-import { syncGuestLocalDataOnRegistration } from '../utils/guestAuthSync';
+import {
+  fetchAllFirebaseData,
+  saveSnapshotToFirebase,
+} from '../utils/firebaseSync';
+import { syncUserAccountOnLogin } from '../utils/guestAuthSync';
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -32,7 +37,10 @@ export default function RegisterScreen() {
     }
 
     if (password.length < 6) {
-      Alert.alert('Invalid Password', 'Password must be at least 6 characters.');
+      Alert.alert(
+        'Invalid Password',
+        'Password must be at least 6 characters.'
+      );
       return;
     }
 
@@ -44,21 +52,33 @@ export default function RegisterScreen() {
     setLoading(true);
 
     try {
+      // Create new Firebase account
       const credential = await createUserWithEmailAndPassword(
         auth,
         email.trim(),
         password
       );
 
+      // Save user's display name
       await updateProfile(credential.user, {
         displayName: name.trim(),
       });
 
-      // Guest/Local অবস্থায় থাকা সব ডেটা নতুন রেজিস্টার্ড অ্যাকাউন্টের সাথে সিঙ্ক করা
-      await syncGuestLocalDataOnRegistration({
+      // Sync Guest/Local data with the new registered account
+      await syncUserAccountOnLogin({
         userId: credential.user.uid,
         email: credential.user.email,
         displayName: name.trim(),
+
+        // Fetch existing cloud data
+        fetchCloudDataFn: async (uid) => {
+          return await fetchAllFirebaseData(uid);
+        },
+
+        // Upload Guest data when cloud is empty
+        saveCloudDataFn: async (uid, data) => {
+          await saveSnapshotToFirebase(uid, data);
+        },
       });
 
       router.replace('/dashboard');
@@ -84,7 +104,10 @@ export default function RegisterScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={styles.content}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.card}>
           <Text style={styles.logo}>MyBudgetApp</Text>
           <Text style={styles.heading}>Create Account</Text>
@@ -122,7 +145,9 @@ export default function RegisterScreen() {
               autoCapitalize="none"
             />
             <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
-              <Text style={styles.showText}>{showPassword ? 'Hide' : 'Show'}</Text>
+              <Text style={styles.showText}>
+                {showPassword ? 'Hide' : 'Show'}
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -164,10 +189,25 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F7F9FC' },
   content: { flexGrow: 1, justifyContent: 'center', padding: 24 },
   card: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 22 },
-  logo: { color: '#2563EB', fontSize: 24, fontWeight: 'bold', marginBottom: 25 },
+  logo: {
+    color: '#2563EB',
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 25,
+  },
   heading: { fontSize: 25, fontWeight: 'bold', color: '#172554' },
-  subtitle: { color: '#64748B', marginTop: 6, marginBottom: 20, lineHeight: 20 },
-  label: { color: '#334155', fontWeight: '600', marginTop: 14, marginBottom: 8 },
+  subtitle: {
+    color: '#64748B',
+    marginTop: 6,
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  label: {
+    color: '#334155',
+    fontWeight: '600',
+    marginTop: 14,
+    marginBottom: 8,
+  },
   input: {
     height: 52,
     borderWidth: 1,
@@ -197,7 +237,11 @@ const styles = StyleSheet.create({
   },
   disabledButton: { opacity: 0.6 },
   buttonText: { color: '#FFFFFF', fontSize: 16, fontWeight: 'bold' },
-  loginRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 24 },
+  loginRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 24,
+  },
   normalText: { color: '#64748B' },
   link: { color: '#2563EB', fontWeight: 'bold' },
 });

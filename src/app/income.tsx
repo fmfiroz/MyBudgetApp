@@ -3,7 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
 import { useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -519,7 +519,7 @@ export default function IncomeSheetScreen() {
     return offsets;
   }, [monthColWidth, visibleColumnsCount]);
 
-  const monthScrollRef = useRef<ScrollView | null>(null);
+  const monthScrollRef = useRef<any>(null);
   const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeGridIndex, setActiveGridIndex] = useState<number>(0);
 

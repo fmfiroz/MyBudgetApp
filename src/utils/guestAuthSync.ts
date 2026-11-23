@@ -1,3 +1,4 @@
+
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type SessionMode = 'guest' | 'registered' | null;
@@ -19,45 +20,76 @@ const APP_DATA_PREFIXES = [
   '@mybudget_budget_v3_',
   '@mybudget_budget_rows_meta_',
   '@mybudget_savings_',
+  '@mybudget_savings_monthly_v1_',
   '@mybudget_shop_debt_',
+  '@mybudget_shop_debt_v2_',
   '@mybudget_debt_shops_',
   '@mybudget_welfare_',
   '@vehicle_',
+  '@mybudget_dashboard_modules_',
+  '@mybudget_app_language_',
+
+  // Firebase static sync keys
+  '@mybudget_app_language_v1',
+  '@mybudget_dashboard_modules_v1',
+  '@mybudget_debt_shops_v2',
+  '@mybudget_budget_rows_meta_v3',
+  '@mybudget_budget_rows_meta_v4',
+  '@mybudget_savings_plans_v1',
+  '@mybudget_welfare_fund_v1',
+  '@vehicle_logsheet_table_v7',
 ];
 
 export async function getAuthSession(): Promise<AuthSessionState> {
   try {
     const raw = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
+
     if (!raw) {
-      return { mode: null, userId: null, updatedAt: new Date().toISOString() };
+      return {
+        mode: null,
+        userId: null,
+        updatedAt: new Date().toISOString(),
+      };
     }
+
     const parsed = JSON.parse(raw) as Partial<AuthSessionState>;
+
     return {
-      mode: parsed.mode === 'guest' || parsed.mode === 'registered' ? parsed.mode : null,
+      mode:
+        parsed.mode === 'guest' || parsed.mode === 'registered'
+          ? parsed.mode
+          : null,
       userId: typeof parsed.userId === 'string' ? parsed.userId : null,
       email: parsed.email ?? null,
       displayName: parsed.displayName ?? null,
       updatedAt: parsed.updatedAt || new Date().toISOString(),
     };
   } catch {
-    return { mode: null, userId: null, updatedAt: new Date().toISOString() };
+    return {
+      mode: null,
+      userId: null,
+      updatedAt: new Date().toISOString(),
+    };
   }
 }
 
 export async function clearAllLocalUserFinanceData(): Promise<void> {
   try {
     const allKeys = await AsyncStorage.getAllKeys();
+
     const keysToRemove = allKeys.filter(
-      (k) =>
-        k === PENDING_MIGRATION_KEY ||
-        k === LOCAL_DATA_OWNER_KEY ||
-        APP_DATA_PREFIXES.some((prefix) => k.startsWith(prefix))
+      (key) =>
+        key === PENDING_MIGRATION_KEY ||
+        key === LOCAL_DATA_OWNER_KEY ||
+        APP_DATA_PREFIXES.some((prefix) => key.startsWith(prefix))
     );
+
     if (keysToRemove.length > 0) {
       await AsyncStorage.multiRemove(keysToRemove);
     }
-  } catch (e) {
-    console.log('Failed to clear local user finance data:', e);
+  } catch (error) {
+    console.log('Failed to clear local user finance data:', error);
+    throw error;
   }
 }
 
@@ -69,6 +101,7 @@ export async function startGuestSession(): Promise<AuthSessionState> {
   }
 
   const existing = await getAuthSession();
+
   const guestId =
     existing.mode === 'guest' && existing.userId
       ? existing.userId
@@ -113,8 +146,9 @@ export async function setRegisteredSession(params: {
 
 export async function collectAllLocalAppData(): Promise<Record<string, unknown>> {
   const allKeys = await AsyncStorage.getAllKeys();
-  const relevantKeys = allKeys.filter((k) =>
-    APP_DATA_PREFIXES.some((prefix) => k.startsWith(prefix))
+
+  const relevantKeys = allKeys.filter((key) =>
+    APP_DATA_PREFIXES.some((prefix) => key.startsWith(prefix))
   );
 
   if (relevantKeys.length === 0) return {};
@@ -122,83 +156,121 @@ export async function collectAllLocalAppData(): Promise<Record<string, unknown>>
   const pairs = await AsyncStorage.multiGet(relevantKeys);
   const snapshot: Record<string, unknown> = {};
 
-  for (const [key, rawVal] of pairs) {
-    if (!rawVal) continue;
+  for (const [key, rawValue] of pairs) {
+    if (rawValue === null) continue;
+
     try {
-      snapshot[key] = JSON.parse(rawVal);
+      snapshot[key] = JSON.parse(rawValue);
     } catch {
-      snapshot[key] = rawVal;
+      snapshot[key] = rawValue;
     }
   }
 
   return snapshot;
 }
 
-export async function syncGuestLocalDataOnRegistration(params: {
+export async function hydrateLocalDataFromCloud(
+  cloudData: Record<string, unknown> | null | undefined
+): Promise<number> {
+  if (!cloudData || typeof cloudData !== 'object') return 0;
+
+  const entries: [string, string][] = [];
+
+  for (const [key, value] of Object.entries(cloudData)) {
+    if (!APP_DATA_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      continue;
+    }
+
+    if (value === undefined || value === null) continue;
+
+    entries.push([
+      key,
+      typeof value === 'string' ? value : JSON.stringify(value),
+    ]);
+  }
+
+  if (entries.length > 0) {
+    await AsyncStorage.multiSet(entries);
+  }
+
+  return entries.length;
+}
+
+/**
+ * Login / Account Switch-এর পর কল হবে:
+ * - অন্য রেজিস্টার্ড ইউজারের লোকাল ডেটা থাকলে মুছে ফেলবে।
+ * - Guest ডেটা থাকলে নতুন অ্যাকাউন্টের ক্লাউড ডেটা পরীক্ষা করবে।
+ * - ক্লাউডে ডেটা থাকলে Guest ডেটা সরিয়ে ক্লাউড ডেটা Restore করবে।
+ * - ক্লাউডে ডেটা না থাকলে Guest ডেটা ক্লাউডে Upload করবে।
+ */
+export async function syncUserAccountOnLogin(params: {
   userId: string;
   email?: string | null;
   displayName?: string | null;
-  cloudSyncFn?: (userId: string, localData: Record<string, unknown>) => Promise<void>;
-  cloudPullAndMergeFn?: (
+  fetchCloudDataFn?: (
+    userId: string
+  ) => Promise<Record<string, unknown> | null>;
+  saveCloudDataFn?: (
     userId: string,
-    localData: Record<string, unknown>
-  ) => Promise<Record<string, unknown> | void>;
-}): Promise<{ syncedCount: number; clearedOtherUser: boolean; queuedForRetry: boolean }> {
+    data: Record<string, unknown>
+  ) => Promise<void>;
+}): Promise<{
+  hydratedCount: number;
+  syncedGuestCount: number;
+  clearedOtherUser: boolean;
+}> {
   const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
 
-  if (currentOwner && currentOwner !== 'guest' && currentOwner !== params.userId) {
+  let clearedOtherUser = false;
+
+  // অন্য রেজিস্টার্ড ইউজারের ডেটা থাকলে সরিয়ে ফেলবে
+  if (
+    currentOwner &&
+    currentOwner !== 'guest' &&
+    currentOwner !== params.userId
+  ) {
     await clearAllLocalUserFinanceData();
-    await setRegisteredSession({
-      userId: params.userId,
-      email: params.email,
-      displayName: params.displayName,
-    });
-    if (params.cloudPullAndMergeFn) {
-      await params.cloudPullAndMergeFn(params.userId, {});
-    }
-    return { syncedCount: 0, clearedOtherUser: true, queuedForRetry: false };
+    clearedOtherUser = true;
   }
 
-  const localData = await collectAllLocalAppData();
-  const syncedCount = Object.keys(localData).length;
+  // Guest ডেটা আগে সংগ্রহ করে রাখবে
+  const guestSnapshot =
+    currentOwner === 'guest'
+      ? await collectAllLocalAppData()
+      : {};
 
+  const guestKeysCount = Object.keys(guestSnapshot).length;
+
+  let hydratedCount = 0;
+  let syncedGuestCount = 0;
+
+  // প্রথমে নতুন অ্যাকাউন্টের Cloud Data পরীক্ষা করবে
+  const cloudData = params.fetchCloudDataFn
+    ? await params.fetchCloudDataFn(params.userId)
+    : null;
+
+  if (cloudData && Object.keys(cloudData).length > 0) {
+    // Cloud Data থাকলে পুরোনো Local Data সরিয়ে Restore করবে
+    await clearAllLocalUserFinanceData();
+
+    hydratedCount = await hydrateLocalDataFromCloud(cloudData);
+  } else if (guestKeysCount > 0 && params.saveCloudDataFn) {
+    // Cloud Data না থাকলে Guest Data Upload করবে
+    await params.saveCloudDataFn(params.userId, guestSnapshot);
+
+    syncedGuestCount = guestKeysCount;
+  }
+
+  // সব কাজ সফল হওয়ার পর Registered Session সেট করবে
   await setRegisteredSession({
     userId: params.userId,
     email: params.email,
     displayName: params.displayName,
   });
 
-  if (syncedCount > 0 && params.cloudSyncFn) {
-    try {
-      await params.cloudSyncFn(params.userId, localData);
-      await AsyncStorage.removeItem(PENDING_MIGRATION_KEY);
-    } catch {
-      await AsyncStorage.setItem(
-        PENDING_MIGRATION_KEY,
-        JSON.stringify({
-          userId: params.userId,
-          localData,
-          savedAt: new Date().toISOString(),
-        })
-      );
-      return { syncedCount, clearedOtherUser: false, queuedForRetry: true };
-    }
-  }
-
-  if (params.cloudPullAndMergeFn) {
-    try {
-      const mergedData = await params.cloudPullAndMergeFn(params.userId, localData);
-      if (mergedData && Object.keys(mergedData).length > 0) {
-        const entries: [string, string][] = Object.entries(mergedData).map(([k, v]) => [
-          k,
-          typeof v === 'string' ? v : JSON.stringify(v),
-        ]);
-        await AsyncStorage.multiSet(entries);
-      }
-    } catch (e) {
-      console.log('Cloud pull/merge failed:', e);
-    }
-  }
-
-  return { syncedCount, clearedOtherUser: false, queuedForRetry: false };
+  return {
+    hydratedCount,
+    syncedGuestCount,
+    clearedOtherUser,
+  };
 }

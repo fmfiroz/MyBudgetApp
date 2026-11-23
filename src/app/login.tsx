@@ -1,3 +1,4 @@
+
 import { Link, useRouter } from 'expo-router';
 import {
   GoogleAuthProvider,
@@ -20,8 +21,12 @@ import {
 } from 'react-native';
 import { auth } from '../firebase';
 import {
+  fetchAllFirebaseData,
+  saveSnapshotToFirebase,
+} from '../utils/firebaseSync';
+import {
   startGuestSession,
-  syncGuestLocalDataOnRegistration,
+  syncUserAccountOnLogin,
 } from '../utils/guestAuthSync';
 
 const GOOGLE_WEB_CLIENT_ID =
@@ -60,6 +65,29 @@ export default function LoginScreen() {
     }
   }, []);
 
+  // Registered user login and guest data synchronization
+  const finalizeRegisteredLogin = async (user: {
+    uid: string;
+    email: string | null;
+    displayName: string | null;
+  }) => {
+    await syncUserAccountOnLogin({
+      userId: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+
+      // Existing Firebase data fetch
+      fetchCloudDataFn: async (uid) => {
+        return await fetchAllFirebaseData(uid);
+      },
+
+      // Guest data upload when cloud is empty
+      saveCloudDataFn: async (uid, data) => {
+        await saveSnapshotToFirebase(uid, data);
+      },
+    });
+  };
+
   const handleLogin = async () => {
     if (!email.trim() || !password) {
       Alert.alert('Required', 'Email and password are required.');
@@ -69,12 +97,18 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
-      const userCred = await signInWithEmailAndPassword(auth, email.trim(), password);
-      await syncGuestLocalDataOnRegistration({
-        userId: userCred.user.uid,
+      const userCred = await signInWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password
+      );
+
+      await finalizeRegisteredLogin({
+        uid: userCred.user.uid,
         email: userCred.user.email,
         displayName: userCred.user.displayName,
       });
+
       router.replace('/dashboard');
     } catch (error: any) {
       const messages: Record<string, string> = {
@@ -96,38 +130,50 @@ export default function LoginScreen() {
 
   const handleGoogleLogin = async () => {
     setLoading(true);
+
     try {
       if (Platform.OS === 'web') {
         const provider = new GoogleAuthProvider();
+        provider.setCustomParameters({ prompt: 'select_account' });
+
         const webCred = await signInWithPopup(auth, provider);
-        await syncGuestLocalDataOnRegistration({
-          userId: webCred.user.uid,
+
+        await finalizeRegisteredLogin({
+          uid: webCred.user.uid,
           email: webCred.user.email,
           displayName: webCred.user.displayName,
         });
+
         router.replace('/dashboard');
         return;
       }
 
       if (!NativeGoogleSignin) {
-        throw new Error('Google Sign-In native module is not available in this build.');
+        throw new Error(
+          'Google Sign-In native module is not available in this build.'
+        );
       }
 
-      await NativeGoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      await NativeGoogleSignin.hasPlayServices({
+        showPlayServicesUpdateDialog: true,
+      });
+
       try {
         await NativeGoogleSignin.signOut();
       } catch {
-        // ignore if no previous session
+        // Ignore if no previous session
       }
 
       const signInResult = await NativeGoogleSignin.signIn();
+
       if ((signInResult as any)?.type === 'cancelled') {
-        setLoading(false);
         return;
       }
 
       const idToken =
-        signInResult?.data?.idToken ?? (signInResult as any)?.idToken ?? null;
+        signInResult?.data?.idToken ??
+        (signInResult as any)?.idToken ??
+        null;
 
       if (!idToken) {
         throw new Error('Google ID Token পাওয়া যায়নি।');
@@ -136,18 +182,25 @@ export default function LoginScreen() {
       const googleCredential = GoogleAuthProvider.credential(idToken);
       const userCred = await signInWithCredential(auth, googleCredential);
 
-      await syncGuestLocalDataOnRegistration({
-        userId: userCred.user.uid,
+      await finalizeRegisteredLogin({
+        uid: userCred.user.uid,
         email: userCred.user.email,
         displayName: userCred.user.displayName,
       });
 
       router.replace('/dashboard');
     } catch (error: any) {
-      if (nativeStatusCodes && error?.code === nativeStatusCodes.SIGN_IN_CANCELLED) {
+      if (
+        nativeStatusCodes &&
+        error?.code === nativeStatusCodes.SIGN_IN_CANCELLED
+      ) {
         return;
       }
-      Alert.alert('Google Login Failed', error?.message || 'Unable to sign in with Google.');
+
+      Alert.alert(
+        'Google Login Failed',
+        error?.message || 'Unable to sign in with Google.'
+      );
     } finally {
       setLoading(false);
     }
@@ -155,11 +208,15 @@ export default function LoginScreen() {
 
   const handleGuestLogin = async () => {
     setLoading(true);
+
     try {
       await startGuestSession();
       router.replace('/dashboard');
     } catch (error: any) {
-      Alert.alert('Guest Login Failed', error?.message || 'Unable to start guest session.');
+      Alert.alert(
+        'Guest Login Failed',
+        error?.message || 'Unable to start guest session.'
+      );
     } finally {
       setLoading(false);
     }
@@ -208,7 +265,10 @@ export default function LoginScreen() {
               secureTextEntry={!showPassword}
               autoCapitalize="none"
             />
-            <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
+
+            <TouchableOpacity
+              onPress={() => setShowPassword(!showPassword)}
+            >
               <Text style={styles.showText}>
                 {showPassword ? 'Hide' : 'Show'}
               </Text>
@@ -241,33 +301,47 @@ export default function LoginScreen() {
           </View>
 
           <TouchableOpacity
-            style={[styles.googleButton, loading && styles.disabledButton]}
+            style={[
+              styles.googleButton,
+              loading && styles.disabledButton,
+            ]}
             onPress={handleGoogleLogin}
             disabled={loading}
           >
-            <Text style={styles.googleButtonText}>Continue with Google</Text>
+            <Text style={styles.googleButtonText}>
+              Continue with Google
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.guestButton, loading && styles.disabledButton]}
+            style={[
+              styles.guestButton,
+              loading && styles.disabledButton,
+            ]}
             onPress={handleGuestLogin}
             disabled={loading}
           >
-            <Text style={styles.guestButtonText}>Continue as Guest</Text>
+            <Text style={styles.guestButtonText}>
+              Continue as Guest
+            </Text>
             <Text style={styles.guestSubText}>
               Local storage sync • Register anytime to keep data
             </Text>
           </TouchableOpacity>
 
           <View style={styles.signupRow}>
-            <Text style={styles.normalText}>Don't have an account? </Text>
+            <Text style={styles.normalText}>
+              Don't have an account?{' '}
+            </Text>
             <Link href="/register" style={styles.link}>
               Sign Up
             </Link>
           </View>
         </View>
 
-        <Text style={styles.footer}>Secure login powered by Firebase</Text>
+        <Text style={styles.footer}>
+          Secure login powered by Firebase
+        </Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -287,12 +361,31 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   logoIcon: { fontSize: 34 },
-  logo: { fontSize: 27, fontWeight: 'bold', color: '#172554', textAlign: 'center' },
-  tagline: { color: '#64748B', textAlign: 'center', marginTop: 6, marginBottom: 28 },
-  card: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 22 },
+  logo: {
+    fontSize: 27,
+    fontWeight: 'bold',
+    color: '#172554',
+    textAlign: 'center',
+  },
+  tagline: {
+    color: '#64748B',
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 28,
+  },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 22,
+  },
   heading: { fontSize: 25, fontWeight: 'bold', color: '#172554' },
   subtitle: { color: '#64748B', marginTop: 6, marginBottom: 25 },
-  label: { color: '#334155', fontWeight: '600', marginBottom: 8, marginTop: 14 },
+  label: {
+    color: '#334155',
+    fontWeight: '600',
+    marginBottom: 8,
+    marginTop: 14,
+  },
   input: {
     height: 52,
     borderWidth: 1,
@@ -312,7 +405,11 @@ const styles = StyleSheet.create({
   },
   passwordInput: { flex: 1, color: '#111827' },
   showText: { color: '#2563EB', fontWeight: '600', padding: 5 },
-  forgotButton: { alignSelf: 'flex-end', marginTop: 15, marginBottom: 22 },
+  forgotButton: {
+    alignSelf: 'flex-end',
+    marginTop: 15,
+    marginBottom: 22,
+  },
   forgotText: { color: '#2563EB', fontWeight: '600' },
   button: {
     height: 54,
@@ -373,9 +470,22 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   disabledButton: { opacity: 0.6 },
-  buttonText: { color: '#FFFFFF', fontSize: 17, fontWeight: 'bold' },
-  signupRow: { flexDirection: 'row', justifyContent: 'center', marginTop: 24 },
+  buttonText: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: 'bold',
+  },
+  signupRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginTop: 24,
+  },
   normalText: { color: '#64748B' },
   link: { color: '#2563EB', fontWeight: 'bold' },
-  footer: { color: '#94A3B8', textAlign: 'center', fontSize: 12, marginTop: 24 },
+  footer: {
+    color: '#94A3B8',
+    textAlign: 'center',
+    fontSize: 12,
+    marginTop: 24,
+  },
 });

@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { getCombinedIncomeForMonth } from '../utils/incomeSyncHelper';
 
 export type SavingsCategoryType = 'Insurance' | 'DPS' | 'Others';
 
@@ -51,13 +52,13 @@ const MONTH_NAME_TO_NUM: Record<string, string> = {
 interface SavingsPlanItem {
   id: string;
   type: SavingsCategoryType;
-  name: string; // Savings / Policy / Scheme Name
-  companyName?: string; // Optional Company Name
-  policyNo?: string; // Policy No.
-  amount: number; // মাসিক কিস্তি / সেভিংস পরিমাণ
+  name: string;
+  companyName?: string;
+  policyNo?: string;
+  amount: number;
   startFiscalYear: number;
-  startMonthIndex: number; // 0..11 within FISCAL_MONTHS
-  durationMonths: number; // মেয়াদ (মাস সংখ্যা)
+  startMonthIndex: number;
+  durationMonths: number;
 }
 
 const SAVINGS_ITEMS_KEY = '@mybudget_savings_plans_v1';
@@ -151,55 +152,6 @@ function getItemStateForMonth(
   };
 }
 
-async function getIncomeNetBalanceForMonth(
-  month: string,
-  fiscalStartYear: number
-): Promise<number> {
-  try {
-    const raw = await AsyncStorage.getItem(
-      `@income_fy_${fiscalStartYear}_${fiscalStartYear + 1}`
-    );
-    if (!raw) return 0;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return 0;
-
-    let basicCents = 0;
-    const basicRow = (parsed as any[]).find(
-      (r) =>
-        r &&
-        !r.hidden &&
-        (r.isBasic || String(r.description || '').trim().toLowerCase() === 'net basic')
-    );
-    if (basicRow?.cells?.[month]) {
-      basicCents = safeToCents(basicRow.cells[month].value);
-    }
-
-    let incomeCents = 0;
-    let deductionCents = 0;
-
-    (parsed as any[]).forEach((row) => {
-      if (!row || row.hidden) return;
-      const cell = row.cells?.[month];
-      if (!cell) return;
-      const val = Number(cell.value) || 0;
-      if (val === 0) return;
-
-      const amtCents =
-        cell.mode === 'percent' ? Math.round((basicCents * val) / 100) : safeToCents(val);
-
-      if (row.type === 'deduction') {
-        deductionCents += amtCents;
-      } else {
-        incomeCents += amtCents;
-      }
-    });
-
-    return safeFromCents(incomeCents - deductionCents);
-  } catch {
-    return 0;
-  }
-}
-
 export default function SavingsScreen() {
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
@@ -222,7 +174,7 @@ export default function SavingsScreen() {
     return offsets;
   }, [monthColWidth, visibleColumnsCount]);
 
-  const monthScrollRef = useRef<ScrollView | null>(null);
+  const monthScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
   const initialScrollDoneRef = useRef<boolean>(false);
   const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [activeGridIndex, setActiveGridIndex] = useState<number>(0);
@@ -242,7 +194,6 @@ export default function SavingsScreen() {
     return obj;
   });
 
-  // Add Savings Modal স্টেট: Name -> Company Name (optional) -> Policy No. -> Amount
   const [addModalVisible, setAddModalVisible] = useState<boolean>(false);
   const [selectedType, setSelectedType] = useState<SavingsCategoryType>('Insurance');
   const [itemName, setItemName] = useState<string>('');
@@ -254,7 +205,6 @@ export default function SavingsScreen() {
     getCurrentFiscalMonthName()
   );
 
-  // Strict Delete Confirmation Modal স্টেট (সহজে ডিলিট হবে না)
   const [deleteTargetPlan, setDeleteTargetPlan] = useState<SavingsPlanItem | null>(null);
   const [deleteCheckboxChecked, setDeleteCheckboxChecked] = useState<boolean>(false);
   const [deleteConfirmTypedText, setDeleteConfirmTypedText] = useState<string>('');
@@ -295,9 +245,10 @@ export default function SavingsScreen() {
         const validPlans = Array.isArray(parsedPlans) ? parsedPlans : [];
         setPlans(validPlans);
 
+        // সব Income Sheet (Salary + Daily + Business + Custom)-এর সম্মিলিত মাসিক আয় লোড করা
         const netMap: { [month: string]: number } = {};
         for (const month of FISCAL_MONTHS) {
-          netMap[month] = await getIncomeNetBalanceForMonth(month, startYr);
+          netMap[month] = await getCombinedIncomeForMonth(month, startYr);
         }
         setIncomeNetByMonth(netMap);
 
@@ -435,7 +386,6 @@ export default function SavingsScreen() {
     setDeleteConfirmTypedText('');
   };
 
-  // ইউজারকে আইটেমের নাম অথবা "DELETE" লিখতে হবে এবং চেকবক্সে টিক দিতে হবে
   const isDeleteConditionMet = useMemo(() => {
     if (!deleteTargetPlan || !deleteCheckboxChecked) return false;
     const typed = deleteConfirmTypedText.trim().toLowerCase();
@@ -518,7 +468,6 @@ export default function SavingsScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* Top Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
@@ -527,7 +476,7 @@ export default function SavingsScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Savings ({fiscalLabel})</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            2-Col Grid • Net - Total Savings
+            All Income Sources Synced • Net - Total Savings
           </Text>
         </View>
 
@@ -546,7 +495,6 @@ export default function SavingsScreen() {
         </View>
       </View>
 
-      {/* Action Bar */}
       <View style={styles.actionBar}>
         <TouchableOpacity
           style={styles.addBtn}
@@ -575,10 +523,8 @@ export default function SavingsScreen() {
         </View>
       </View>
 
-      {/* Fixed Particulars Column + 2-Column Grid-Snapped Months */}
       <ScrollView style={styles.verticalScroll}>
         <View style={styles.sheetWrapper}>
-          {/* Left Fixed Column */}
           <View style={[styles.fixedColumn, { width: descColWidth }]}>
             <View style={[styles.headerCell, { width: descColWidth }]}>
               <Text style={styles.headerCellText}>Policy / Scheme</Text>
@@ -649,7 +595,6 @@ export default function SavingsScreen() {
             )}
           </View>
 
-          {/* Right Exact 2-Column Grid-Snap Viewport */}
           <View style={{ width: exactRightViewportWidth, overflow: 'hidden' }}>
             <ScrollView
               ref={monthScrollRef}
@@ -758,7 +703,6 @@ export default function SavingsScreen() {
         </View>
       </ScrollView>
 
-      {/* Add Savings / Policy / Scheme Modal */}
       <Modal visible={addModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -875,7 +819,6 @@ export default function SavingsScreen() {
         </View>
       </Modal>
 
-      {/* Strict Two-Step Delete Confirmation Modal */}
       <Modal visible={Boolean(deleteTargetPlan)} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>

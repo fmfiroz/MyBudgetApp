@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useFocusEffect, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -15,14 +15,13 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { getCombinedIncomeForMonth } from '../utils/incomeSyncHelper';
 import {
   getBudgetShopDebtLink,
   getPrevYearMonth,
   MonthlyDebtRecord,
-  saveShopDebtPaymentFromBudget
+  saveShopDebtPaymentFromBudget,
 } from '../utils/shopDebtBudgetSync';
-
-export type AppLanguage = 'en' | 'bn';
 
 interface ShopProfile {
   id: string;
@@ -59,27 +58,19 @@ const MONTH_NAME_TO_NUM: Record<string, string> = {
   December: '12',
 };
 
-const BENGALI_MONTH_MAP: Record<string, string> = {
-  January: 'জানুয়ারী',
-  February: 'ফেব্রুয়ারি',
-  March: 'মার্চ',
-  April: 'এপ্রিল',
-  May: 'মে',
-  June: 'জুন',
-  July: 'জুলাই',
-  August: 'আগস্ট',
-  September: 'সেপ্টেম্বর',
-  October: 'অক্টোবর',
-  November: 'নভেম্বর',
-  December: 'ডিসেম্বর',
-};
+interface SuggestionCategory {
+  id: string;
+  name: string;
+}
 
 interface BudgetCategoryRow {
   id: string;
-  enName: string;
-  bnName: string;
+  name: string;
   isShopDebtRow?: boolean;
   linkedShopId?: string;
+  isVehicleRow?: boolean;
+  linkedVehicleId?: string;
+  isWelfareRow?: boolean;
   amounts: { [month: string]: number };
   cleared: { [month: string]: boolean };
 }
@@ -93,84 +84,27 @@ interface MonthlyBudgetStorage {
 }
 
 const BUDGET_MONTH_KEY_PREFIX = '@mybudget_budget_v3_';
-const BUDGET_ROWS_META_KEY = '@mybudget_budget_rows_meta_v3';
+const BUDGET_ROWS_META_KEY = '@mybudget_budget_rows_meta_v4';
 const SAVINGS_MONTH_KEY_PREFIX = '@mybudget_savings_monthly_v1_';
-const LANGUAGE_STORAGE_KEY = '@mybudget_app_language_v1';
 const SHOPS_LIST_KEY = '@mybudget_debt_shops_v2';
+const VEHICLE_STORAGE_KEY = '@vehicle_logsheet_table_v7';
+const WELFARE_ROW_ID = 'cat-welfare-fund';
 
-const DEFAULT_SHOPS: ShopProfile[] = [
-  { id: 'shop-ab-hakim', name: 'Ab. Hakim' },
-  { id: 'shop-ab-karim', name: 'Ab. Karim' },
+const CATEGORY_SUGGESTIONS: SuggestionCategory[] = [
+  { id: 'sug-daily-market', name: 'Daily Market Expense' },
+  { id: 'sug-other-market', name: 'Other Market Expense' },
+  { id: 'sug-bkash-in', name: 'bKash In (Elec, Water, Net & Mob)' },
+  { id: 'sug-net-mob', name: 'Internet & Mobile Bill' },
+  { id: 'sug-mosque', name: 'Monthly Mosque Donation' },
+  { id: 'sug-rika-pocket', name: "Rika's Pocket Money" },
+  { id: 'sug-children-edu', name: "Children's Education" },
+  { id: 'sug-qurbani-savings', name: 'Qurbani Savings - Office' },
+  { id: 'sug-eid-meat', name: 'Eid Meat' },
+  { id: 'sug-office-food', name: 'Office Food Bill' },
+  { id: 'sug-water-bill', name: 'Water Bill' },
+  { id: 'sug-arabic-tuition', name: 'Arabic Tuition Fee' },
+  { id: 'sug-others', name: 'Others' },
 ];
-
-const UI_TEXT = {
-  en: {
-    budgetTitle: 'Budget',
-    particulars: 'Particulars',
-    netSavings: 'Net Savings',
-    totalBudget: 'Total Budget',
-    extraGhatti: 'Extra / Ghatti',
-    addCategory: '+ Add Item',
-    now: 'Now',
-    settingsTitle: 'Language & Settings',
-    selectLanguage: 'Select Display Language',
-    english: 'English',
-    bangla: 'বাংলা (Bangla)',
-    close: 'Close',
-    cancel: 'Cancel',
-    save: 'Save',
-    add: 'Add',
-    confirm: 'Confirm',
-    deleteItem: 'Delete Item',
-    deleteConfirm: 'Are you sure you want to delete this budget item?',
-    editItemTitle: 'Edit Budget Item',
-    addItemTitle: 'Add New Budget Item',
-    itemNameLabel: 'Item Name',
-    amountLabel: 'Amount (Tk.)',
-    applyForwardLabel: 'Apply to remaining months up to June',
-    missingName: 'Please enter a budget item name.',
-    shopDebtSyncHint: 'Shop-wise Debt auto-linked • Current & Next Grid',
-    billStatusLabel: 'Bill Payment Status',
-    clearedBadge: 'Cleared',
-    markClearedBtn: 'Mark Bill Cleared',
-    unmarkClearedBtn: 'Unmark Cleared Bill',
-    confirmMarkCleared: 'Confirm: Mark this bill as CLEARED (color-marked)?',
-    confirmUnmarkCleared: 'Confirm: Remove CLEARED color mark from this bill?',
-  },
-  bn: {
-    budgetTitle: 'বাজেট',
-    particulars: 'খাত / বিবরণ',
-    netSavings: 'নেট সেভিংস',
-    totalBudget: 'মোট বাজেট',
-    extraGhatti: 'এক্সট্রা / ঘাটতি',
-    addCategory: '+ খাত যোগ',
-    now: 'বর্তমান',
-    settingsTitle: 'ভাষা ও সেটিংস',
-    selectLanguage: 'ভাষা নির্বাচন করুন',
-    english: 'English',
-    bangla: 'বাংলা (Bangla)',
-    close: 'বন্ধ করুন',
-    cancel: 'বাতিল',
-    save: 'সেভ করুন',
-    add: 'যোগ করুন',
-    confirm: 'নিশ্চিত করুন',
-    deleteItem: 'খাত মুছুন',
-    deleteConfirm: 'আপনি কি এই বাজেট খাতটি মুছে ফেলতে চান?',
-    editItemTitle: 'বাজেট পরিমাণ ও বিল স্ট্যাটাস',
-    addItemTitle: 'নতুন বাজেট খাত যোগ করুন',
-    itemNameLabel: 'খাতের নাম',
-    amountLabel: 'টাকার পরিমাণ',
-    applyForwardLabel: 'জুন পর্যন্ত পরবর্তী মাসগুলোতেও প্রযোজ্য হবে',
-    missingName: 'অনুগ্রহ করে খাতের নাম লিখুন।',
-    shopDebtSyncHint: 'দোকানভিত্তিক Shop Debt খাত যুক্ত • Current ও Next গ্রিড',
-    billStatusLabel: 'বিল পরিশোধের অবস্থা',
-    clearedBadge: 'Cleared',
-    markClearedBtn: 'বিল ক্লিয়ার মার্ক করুন',
-    unmarkClearedBtn: 'ক্লিয়ার মার্ক বাতিল করুন',
-    confirmMarkCleared: 'নিশ্চিত করুন: এই খাতের বিলটি কি ক্লিয়ার (রঙ মার্ক) হয়েছে?',
-    confirmUnmarkCleared: 'নিশ্চিত করুন: এই খাতের ক্লিয়ার রঙ মার্ক কি তুলে নেবেন?',
-  },
-};
 
 function safeToCents(val: unknown): number {
   if (typeof val === 'number') {
@@ -260,153 +194,101 @@ function getBudgetRowIdForShop(shopId: string): string {
   return `cat-debt-${shopId}`;
 }
 
-const BASE_NON_DEBT_CATEGORIES: BudgetCategoryRow[] = [
-  {
-    id: 'cat-daily-market',
-    enName: 'Daily Market Expense',
-    bnName: 'দৈনিক বাজার খরচ',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-other-market',
-    enName: 'Other Market Expense',
-    bnName: 'অন্যান্য বাজার খরচ',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-bkash-in',
-    enName: 'bKash In (Elec, Water, Net & Mob)',
-    bnName: 'বিকাশ ইন (বিদ্যুৎ, পানি, ইন্টারনেট ও মোবাইল বিল)',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-bike-fuel',
-    enName: 'Bike Fuel',
-    bnName: 'বাইকের তেল',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-net-mob',
-    enName: 'Internet & Mobile Bill',
-    bnName: 'ইন্টারনেট ও মোবাইল বিল',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-mosque',
-    enName: 'Monthly Mosque Donation',
-    bnName: 'মসজিদের মাসিক দান',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-rika-pocket',
-    enName: "Rika's Pocket Money",
-    bnName: 'রিকার হাত খরচা',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-children-edu',
-    enName: "Children's Education",
-    bnName: 'সন্তানদের শিক্ষাব্যয়',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-qurbani-savings',
-    enName: 'Qurbani Savings - Office',
-    bnName: 'কুরবাণীর সঞ্চয় - অফিস',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-eid-meat',
-    enName: 'Eid Meat',
-    bnName: 'ঈদের মাংস',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-office-food',
-    enName: 'Office Food Bill',
-    bnName: 'অফিসে খাবারের বিল',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-water-bill',
-    enName: 'Water Bill',
-    bnName: 'পানির বিল',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-arabic-tuition',
-    enName: 'Arabic Tuition Fee',
-    bnName: 'আরবি পড়ার বেতন',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-  {
-    id: 'cat-others',
-    enName: 'Others',
-    bnName: 'অন্যান্য',
-    amounts: buildEmptyMonthMap(),
-    cleared: buildEmptyClearedMap(),
-  },
-];
+function parseAnyDateToYearMonth(dateStr?: string): string | null {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  const trimmed = dateStr.trim();
 
-async function getIncomeNetPayForMonth(
-  month: string,
-  fiscalStartYear: number
-): Promise<number> {
+  const dmyMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dmyMatch) {
+    const mm = dmyMatch[2].padStart(2, '0');
+    const yyyy = dmyMatch[3];
+    return `${yyyy}-${mm}`;
+  }
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}`;
+  }
+
+  return null;
+}
+
+interface VehicleMonthExpenseResult {
+  vehicles: { vehicleId: string; vehicleName: string }[];
+  byYearMonth: Record<string, Record<string, number>>;
+}
+
+async function getVehicleExpensesByYearMonth(): Promise<VehicleMonthExpenseResult> {
   try {
-    const raw = await AsyncStorage.getItem(
-      `@income_fy_${fiscalStartYear}_${fiscalStartYear + 1}`
-    );
-    if (!raw) return 0;
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return 0;
-
-    let basicCents = 0;
-    const basicRow = (parsed as any[]).find(
-      (r) =>
-        r &&
-        !r.hidden &&
-        (r.isBasic || String(r.description || '').trim().toLowerCase() === 'net basic')
-    );
-    if (basicRow?.cells?.[month]) {
-      basicCents = safeToCents(basicRow.cells[month].value);
+    const raw = await AsyncStorage.getItem(VEHICLE_STORAGE_KEY);
+    if (!raw) {
+      return { vehicles: [], byYearMonth: {} };
     }
 
-    let incomeCents = 0;
-    let deductionCents = 0;
+    const parsed = JSON.parse(raw) as {
+      vehicles?: { id: string; name: string }[];
+      entries?: {
+        vehicleId: string;
+        kind: 'fuel' | 'maintenance';
+        date: string;
+        finishDate?: string;
+        taka?: number;
+        serviceCharge?: number;
+        purchasedItems?: { price?: number }[];
+      }[];
+    };
 
-    (parsed as any[]).forEach((row) => {
-      if (!row || row.hidden) return;
-      const cell = row.cells?.[month];
-      if (!cell) return;
-      const val = Number(cell.value) || 0;
-      if (val === 0) return;
+    const rawVehicles = Array.isArray(parsed?.vehicles) ? parsed.vehicles : [];
+    const entries = Array.isArray(parsed?.entries) ? parsed.entries : [];
 
-      const amtCents =
-        cell.mode === 'percent' ? Math.round((basicCents * val) / 100) : safeToCents(val);
+    const vehicles = rawVehicles
+      .filter((v) => v && v.id && v.name && v.name.trim().length > 0)
+      .map((v) => ({
+        vehicleId: v.id,
+        vehicleName: v.name.trim(),
+      }));
 
-      if (row.type === 'deduction') {
-        deductionCents += amtCents;
+    const validIds = new Set(vehicles.map((v) => v.vehicleId));
+    const centsByYM = new Map<string, Map<string, number>>();
+
+    entries.forEach((entry) => {
+      if (!entry || !entry.vehicleId || !validIds.has(entry.vehicleId)) return;
+
+      const effectiveDate =
+        entry.kind === 'fuel' && entry.finishDate ? entry.finishDate : entry.date;
+      const entryYM = parseAnyDateToYearMonth(effectiveDate);
+      if (!entryYM) return;
+
+      let entryCostCents = 0;
+      if (entry.kind === 'fuel') {
+        entryCostCents = safeToCents(entry.taka);
       } else {
-        incomeCents += amtCents;
+        const srvCents = safeToCents(entry.serviceCharge);
+        const partsCents = Array.isArray(entry.purchasedItems)
+          ? entry.purchasedItems.reduce((sum, p) => sum + safeToCents(p?.price), 0)
+          : 0;
+        entryCostCents = srvCents + partsCents;
       }
+
+      if (!centsByYM.has(entryYM)) {
+        centsByYM.set(entryYM, new Map<string, number>());
+      }
+      const vehMap = centsByYM.get(entryYM)!;
+      vehMap.set(entry.vehicleId, (vehMap.get(entry.vehicleId) || 0) + entryCostCents);
     });
 
-    return safeFromCents(incomeCents - deductionCents);
+    const byYearMonth: Record<string, Record<string, number>> = {};
+    centsByYM.forEach((vehMap, ym) => {
+      const obj: Record<string, number> = {};
+      vehMap.forEach((c, vId) => {
+        obj[vId] = safeFromCents(c);
+      });
+      byYearMonth[ym] = obj;
+    });
+
+    return { vehicles, byYearMonth };
   } catch {
-    return 0;
+    return { vehicles: [], byYearMonth: {} };
   }
 }
 
@@ -425,11 +307,6 @@ async function getSavingsForYearMonth(yearMonth: string): Promise<number> {
 export default function BudgetScreen() {
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
-
-  const [lang, setLang] = useState<AppLanguage>('en');
-  const [settingsModalVisible, setSettingsModalVisible] = useState<boolean>(false);
-
-  const t = UI_TEXT[lang];
 
   const isMobileScreen = screenWidth < 768;
   const visibleColumnsCount = isMobileScreen
@@ -470,7 +347,6 @@ export default function BudgetScreen() {
     return obj;
   });
 
-  // Add Row Modal
   const [addModalVisible, setAddModalVisible] = useState<boolean>(false);
   const [newRowName, setNewRowName] = useState<string>('');
   const [newRowAmount, setNewRowAmount] = useState<string>('');
@@ -478,7 +354,6 @@ export default function BudgetScreen() {
     getCurrentFiscalMonthName()
   );
 
-  // Edit Cell Modal
   const [editModalVisible, setEditModalVisible] = useState<boolean>(false);
   const [editingRow, setEditingRow] = useState<BudgetCategoryRow | null>(null);
   const [editingMonth, setEditingMonth] = useState<string>('July');
@@ -488,113 +363,115 @@ export default function BudgetScreen() {
 
   const fiscalLabel = formatFiscalYearLabel(fiscalStartYear);
 
-  useEffect(() => {
-    const loadLang = async () => {
-      try {
-        const savedLang = await AsyncStorage.getItem(LANGUAGE_STORAGE_KEY);
-        if (savedLang === 'bn' || savedLang === 'en') {
-          setLang(savedLang);
-        }
-      } catch {
-        // default en
-      }
-    };
-    loadLang();
-  }, []);
-
-  const handleChangeLanguage = async (nextLang: AppLanguage) => {
-    setLang(nextLang);
-    try {
-      await AsyncStorage.setItem(LANGUAGE_STORAGE_KEY, nextLang);
-    } catch {
-      // ignore
-    }
-  };
-
-  const getRowDisplayName = (row: BudgetCategoryRow): string => {
-    return lang === 'bn' ? row.bnName || row.enName : row.enName || row.bnName;
-  };
-
-  const getMonthDisplayLabel = (month: string, calYear: number): string => {
-    const mLabel = lang === 'bn' ? BENGALI_MONTH_MAP[month] || month : month.slice(0, 3);
-    return `${mLabel} ${String(calYear).slice(-2)}`;
-  };
-
-  // Shop Debt-এর সব দোকানের নাম অনুযায়ী বাজেট তালিকায় খাত সিঙ্ক ও লোড করা
   const loadFullYearBudget = useCallback(async (startYr: number) => {
     try {
-      const [shopsRaw, metaRaw] = await Promise.all([
+      const currentMonthName = getCurrentFiscalMonthName();
+
+      const [shopsRaw, metaRaw, vehicleData] = await Promise.all([
         AsyncStorage.getItem(SHOPS_LIST_KEY),
         AsyncStorage.getItem(BUDGET_ROWS_META_KEY),
+        getVehicleExpensesByYearMonth(),
       ]);
 
-      const shopList: ShopProfile[] = shopsRaw
-        ? (JSON.parse(shopsRaw) as ShopProfile[])
-        : DEFAULT_SHOPS;
-
-      const validShops =
-        Array.isArray(shopList) && shopList.length > 0 ? shopList : DEFAULT_SHOPS;
+      const shopList: ShopProfile[] = shopsRaw ? (JSON.parse(shopsRaw) as ShopProfile[]) : [];
+      const validShops = Array.isArray(shopList) ? shopList : [];
       const validShopIdsSet = new Set(validShops.map((s) => s.id));
+      const validVehicleIdsSet = new Set(vehicleData.vehicles.map((v) => v.vehicleId));
 
       let baseRows: BudgetCategoryRow[] = [];
 
       if (metaRaw) {
-        const parsedMeta = JSON.parse(metaRaw) as BudgetCategoryRow[];
-        if (Array.isArray(parsedMeta) && parsedMeta.length > 0) {
-          // মুছে ফেলা দোকানের পুরোনো রো বাদ দিয়ে বাকিগুলো রাখা
+        const parsedMeta = JSON.parse(metaRaw) as any[];
+        if (Array.isArray(parsedMeta)) {
           baseRows = parsedMeta
             .filter((m) => {
-              if (!m.isShopDebtRow) return true;
-              const sId = m.linkedShopId || 'shop-ab-hakim';
-              return validShopIdsSet.has(sId);
+              if (m.id === WELFARE_ROW_ID || m.isWelfareRow) return true;
+              if (m.isShopDebtRow) {
+                return validShopIdsSet.has(m.linkedShopId || '');
+              }
+              if (m.isVehicleRow) {
+                return validVehicleIdsSet.has(m.linkedVehicleId || '');
+              }
+              return Boolean(m.isUserAdded);
             })
             .map((m) => ({
               id: m.id,
-              enName: m.enName || m.bnName || 'Item',
-              bnName: m.bnName || m.enName || 'খাত',
+              name: m.name || m.enName || m.bnName || 'Item',
               isShopDebtRow: Boolean(m.isShopDebtRow),
-              linkedShopId: m.linkedShopId || (m.isShopDebtRow ? 'shop-ab-hakim' : undefined),
+              linkedShopId: m.linkedShopId,
+              isVehicleRow: Boolean(m.isVehicleRow),
+              linkedVehicleId: m.linkedVehicleId,
+              isWelfareRow: m.id === WELFARE_ROW_ID || Boolean(m.isWelfareRow),
               amounts: buildEmptyMonthMap(),
               cleared: buildEmptyClearedMap(),
             }));
         }
       }
 
-      if (baseRows.length === 0) {
-        baseRows = BASE_NON_DEBT_CATEGORIES.map((r) => ({
-          ...r,
+      // Welfare Fund খাত সর্বদা বাজেটে থাকবে যাতে ইউজার Welfare-এর জন্য বাজেট রাখতে পারে
+      const hasWelfare = baseRows.some(
+        (r) => r.id === WELFARE_ROW_ID || r.isWelfareRow
+      );
+      if (!hasWelfare) {
+        baseRows.unshift({
+          id: WELFARE_ROW_ID,
+          name: 'Welfare Fund',
+          isWelfareRow: true,
           amounts: buildEmptyMonthMap(),
           cleared: buildEmptyClearedMap(),
-        }));
+        });
       }
 
-      // প্রতিটি দোকানের জন্য বাজেট তালিকায় খাত নিশ্চিত করা (না থাকলে যুক্ত হবে, নাম বদলালে আপডেট হবে)
+      // ১. Shop Debt পেজ থেকে দোকান অনুযায়ী খাত যুক্ত/আপডেট করা
       validShops.forEach((shop) => {
         const rowId = getBudgetRowIdForShop(shop.id);
         const existingIdx = baseRows.findIndex(
           (r) => r.id === rowId || (r.isShopDebtRow && r.linkedShopId === shop.id)
         );
-        const enTitle = `${shop.name}'s Debt`;
-        const bnTitle = `${shop.name}-এর ধার`;
+        const title = `${shop.name}'s Debt`;
 
         if (existingIdx >= 0) {
           baseRows[existingIdx] = {
             ...baseRows[existingIdx],
             id: rowId,
-            enName: enTitle,
-            bnName: bnTitle,
+            name: title,
             isShopDebtRow: true,
             linkedShopId: shop.id,
           };
         } else {
-          // ২য় অবস্থানে (Daily Market-এর পর) দোকানের ধার খাতটি যুক্ত করা
-          const insertPos = Math.min(2, baseRows.length);
-          baseRows.splice(insertPos, 0, {
+          baseRows.push({
             id: rowId,
-            enName: enTitle,
-            bnName: bnTitle,
+            name: title,
             isShopDebtRow: true,
             linkedShopId: shop.id,
+            amounts: buildEmptyMonthMap(),
+            cleared: buildEmptyClearedMap(),
+          });
+        }
+      });
+
+      // ২. Vehicle Expense পেজের প্রতিটি গাড়ির নামে আলাদা খাত যুক্ত/আপডেট করা
+      vehicleData.vehicles.forEach((veh) => {
+        const vRowId = `cat-veh-${veh.vehicleId}`;
+        const existingIdx = baseRows.findIndex(
+          (r) => r.id === vRowId || (r.isVehicleRow && r.linkedVehicleId === veh.vehicleId)
+        );
+        const title = `${veh.vehicleName} Expense`;
+
+        if (existingIdx >= 0) {
+          baseRows[existingIdx] = {
+            ...baseRows[existingIdx],
+            id: vRowId,
+            name: title,
+            isVehicleRow: true,
+            linkedVehicleId: veh.vehicleId,
+          };
+        } else {
+          baseRows.push({
+            id: vRowId,
+            name: title,
+            isVehicleRow: true,
+            linkedVehicleId: veh.vehicleId,
             amounts: buildEmptyMonthMap(),
             cleared: buildEmptyClearedMap(),
           });
@@ -607,23 +484,29 @@ export default function BudgetScreen() {
         const ym = getYearMonthForFiscalMonth(month, startYr);
         const prevYM = getPrevYearMonth(ym);
 
-        const [netPay, savingsAmt, budgetRaw] = await Promise.all([
-          getIncomeNetPayForMonth(month, startYr),
+        const [combinedIncome, savingsAmt, budgetRaw] = await Promise.all([
+          getCombinedIncomeForMonth(month, startYr),
           getSavingsForYearMonth(ym),
           AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`),
         ]);
 
-        const netSavCents = safeToCents(netPay) - safeToCents(savingsAmt);
+        const netSavCents = safeToCents(combinedIncome) - safeToCents(savingsAmt);
         netSavMap[month] = safeFromCents(netSavCents);
 
         const parsedMonth: Partial<MonthlyBudgetStorage> = budgetRaw
           ? (JSON.parse(budgetRaw) as Partial<MonthlyBudgetStorage>)
           : {};
 
-        for (const row of baseRows) {
-          row.cleared[month] = Boolean(parsedMonth.rowCleared?.[row.id]);
+        const monthVehicleMap = vehicleData.byYearMonth[ym] || {};
 
-          if (row.isShopDebtRow && row.linkedShopId) {
+        for (const row of baseRows) {
+          if (row.isVehicleRow && row.linkedVehicleId) {
+            const vehMonthAmt = safeFromCents(safeToCents(monthVehicleMap[row.linkedVehicleId]));
+            row.amounts[month] = vehMonthAmt;
+            row.cleared[month] = vehMonthAmt > 0;
+          } else if (row.isShopDebtRow && row.linkedShopId) {
+            row.cleared[month] = Boolean(parsedMonth.rowCleared?.[row.id]);
+
             const [prevShopRaw, curShopRaw, legacyLink] = await Promise.all([
               AsyncStorage.getItem(getShopMonthStorageKey(row.linkedShopId, prevYM)),
               AsyncStorage.getItem(getShopMonthStorageKey(row.linkedShopId, ym)),
@@ -639,27 +522,46 @@ export default function BudgetScreen() {
               ? (JSON.parse(curShopRaw) as Partial<MonthlyDebtRecord>)
               : {};
 
-            const carryoverCents =
-              safeToCents(prevRec.totalBalanceDue) > 0
-                ? safeToCents(prevRec.totalBalanceDue)
-                : safeToCents(curRec.prevMonthCarryover) > 0
-                ? safeToCents(curRec.prevMonthCarryover)
-                : safeToCents(legacyLink?.carryoverDebtFromPrevMonth);
+            const curShopExpenseCents =
+              safeToCents(curRec.totalBalanceDue) > 0
+                ? safeToCents(curRec.totalBalanceDue)
+                : safeToCents(prevRec.totalBalanceDue) > 0
+                  ? safeToCents(prevRec.totalBalanceDue)
+                  : safeToCents(curRec.prevMonthCarryover) > 0
+                    ? safeToCents(curRec.prevMonthCarryover)
+                    : safeToCents(legacyLink?.carryoverDebtFromPrevMonth);
 
             const savedCellValCents =
               parsedMonth.rowAmounts?.[row.id] !== undefined
                 ? safeToCents(parsedMonth.rowAmounts[row.id])
                 : 0;
 
-            row.amounts[month] =
-              savedCellValCents > 0
-                ? safeFromCents(savedCellValCents)
-                : safeFromCents(carryoverCents);
+            if (month === currentMonthName && curShopExpenseCents > 0) {
+              row.amounts[month] = safeFromCents(curShopExpenseCents);
+            } else {
+              row.amounts[month] =
+                savedCellValCents > 0
+                  ? safeFromCents(savedCellValCents)
+                  : safeFromCents(curShopExpenseCents);
+            }
           } else {
+            row.cleared[month] = Boolean(parsedMonth.rowCleared?.[row.id]);
             row.amounts[month] = safeFromCents(safeToCents(parsedMonth.rowAmounts?.[row.id]));
           }
         }
       }
+
+      const metaPayload = baseRows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        isShopDebtRow: Boolean(r.isShopDebtRow),
+        linkedShopId: r.linkedShopId,
+        isVehicleRow: Boolean(r.isVehicleRow),
+        linkedVehicleId: r.linkedVehicleId,
+        isWelfareRow: r.id === WELFARE_ROW_ID || Boolean(r.isWelfareRow),
+        isUserAdded: !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
+      }));
+      await AsyncStorage.setItem(BUDGET_ROWS_META_KEY, JSON.stringify(metaPayload));
 
       setMonthNetSavings(netSavMap);
       setRows(baseRows);
@@ -671,6 +573,12 @@ export default function BudgetScreen() {
   useEffect(() => {
     loadFullYearBudget(fiscalStartYear);
   }, [fiscalStartYear, loadFullYearBudget]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadFullYearBudget(fiscalStartYear);
+    }, [fiscalStartYear, loadFullYearBudget])
+  );
 
   const snapToGridIndex = useCallback(
     (targetIdx: number, animated = true) => {
@@ -752,12 +660,13 @@ export default function BudgetScreen() {
 
       const metaPayload = updatedRows.map((r) => ({
         id: r.id,
-        enName: r.enName,
-        bnName: r.bnName,
+        name: r.name,
         isShopDebtRow: Boolean(r.isShopDebtRow),
         linkedShopId: r.linkedShopId,
-        amounts: buildEmptyMonthMap(),
-        cleared: buildEmptyClearedMap(),
+        isVehicleRow: Boolean(r.isVehicleRow),
+        linkedVehicleId: r.linkedVehicleId,
+        isWelfareRow: r.id === WELFARE_ROW_ID || Boolean(r.isWelfareRow),
+        isUserAdded: !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
       }));
       await AsyncStorage.setItem(BUDGET_ROWS_META_KEY, JSON.stringify(metaPayload));
 
@@ -770,7 +679,7 @@ export default function BudgetScreen() {
         updatedRows.forEach((r) => {
           const val = safeFromCents(safeToCents(r.amounts[month]));
           amountsMap[r.id] = val;
-          clearedMap[r.id] = Boolean(r.cleared[month]);
+          clearedMap[r.id] = r.isVehicleRow ? val > 0 : Boolean(r.cleared[month]);
           if (r.isShopDebtRow) {
             totalShopDebtVal += val;
           }
@@ -820,17 +729,21 @@ export default function BudgetScreen() {
   }, [rows, monthNetSavings]);
 
   const openEditCellModal = (row: BudgetCategoryRow, month: string) => {
+    const currentVal = safeFromCents(safeToCents(row.amounts[month]));
     setEditingRow(row);
     setEditingMonth(month);
-    setEditAmountText(String(row.amounts[month] || 0));
-    setEditClearedState(Boolean(row.cleared[month]));
+    setEditAmountText(String(currentVal));
+    setEditClearedState(row.isVehicleRow ? currentVal > 0 : Boolean(row.cleared[month]));
     setApplyForward(false);
     setEditModalVisible(true);
   };
 
   const handleRequestToggleClearedWithConfirm = () => {
+    if (editingRow?.isVehicleRow) return;
     const nextState = !editClearedState;
-    const message = nextState ? t.confirmMarkCleared : t.confirmUnmarkCleared;
+    const message = nextState
+      ? 'নিশ্চিত করুন: এই খাতের বিলটি কি ক্লিয়ার (রঙ মার্ক) হয়েছে?'
+      : 'নিশ্চিত করুন: এই খাতের ক্লিয়ার রঙ মার্ক কি তুলে নেবেন?';
 
     const applyToggle = () => {
       setEditClearedState(nextState);
@@ -840,9 +753,9 @@ export default function BudgetScreen() {
       const ok = typeof window !== 'undefined' ? window.confirm(message) : true;
       if (ok) applyToggle();
     } else {
-      Alert.alert(t.confirm, message, [
-        { text: t.cancel, style: 'cancel' },
-        { text: t.confirm, onPress: applyToggle },
+      Alert.alert('নিশ্চিত করুন', message, [
+        { text: 'বাতিল', style: 'cancel' },
+        { text: 'নিশ্চিত করুন', onPress: applyToggle },
       ]);
     }
   };
@@ -862,12 +775,12 @@ export default function BudgetScreen() {
         for (let i = startIdx; i < FISCAL_MONTHS.length; i++) {
           const m = FISCAL_MONTHS[i];
           nextAmounts[m] = val;
-          nextCleared[m] = editClearedState;
+          nextCleared[m] = r.isVehicleRow ? val > 0 : editClearedState;
           affectedMonths.push(m);
         }
       } else {
         nextAmounts[editingMonth] = val;
-        nextCleared[editingMonth] = editClearedState;
+        nextCleared[editingMonth] = r.isVehicleRow ? val > 0 : editClearedState;
         affectedMonths.push(editingMonth);
       }
 
@@ -878,18 +791,17 @@ export default function BudgetScreen() {
     await persistRowsAndMonths(updated, affectedMonths);
   };
 
-  const handleAddRow = async () => {
-    const cleanName = newRowName.trim();
+  const handleAddRow = async (overrideName?: string) => {
+    const cleanName = (overrideName !== undefined ? overrideName : newRowName).trim();
     if (!cleanName) {
-      Alert.alert(t.missingName);
+      Alert.alert('খাতের নাম লিখুন বা Suggestion নির্বাচন করুন।');
       return;
     }
 
     const amt = safeFromCents(Math.max(0, safeToCents(newRowAmount)));
     const newRow: BudgetCategoryRow = {
-      id: `b-item-${Date.now()}`,
-      enName: cleanName,
-      bnName: cleanName,
+      id: `b-item-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+      name: cleanName,
       amounts: buildEmptyMonthMap(),
       cleared: buildEmptyClearedMap(),
     };
@@ -909,12 +821,15 @@ export default function BudgetScreen() {
     };
 
     if (Platform.OS === 'web') {
-      const ok = typeof window !== 'undefined' ? window.confirm(t.deleteConfirm) : true;
+      const ok =
+        typeof window !== 'undefined'
+          ? window.confirm('আপনি কি এই বাজেট খাতটি মুছে ফেলতে চান?')
+          : true;
       if (ok) await confirmDelete();
     } else {
-      Alert.alert(t.deleteItem, t.deleteConfirm, [
-        { text: t.cancel, style: 'cancel' },
-        { text: t.deleteItem, style: 'destructive', onPress: confirmDelete },
+      Alert.alert('খাত মুছুন', 'আপনি কি এই বাজেট খাতটি মুছে ফেলতে চান?', [
+        { text: 'বাতিল', style: 'cancel' },
+        { text: 'মুছুন', style: 'destructive', onPress: confirmDelete },
       ]);
     }
   };
@@ -922,7 +837,7 @@ export default function BudgetScreen() {
   const renderMonthCellsForRow = (row: BudgetCategoryRow) => {
     return FISCAL_MONTHS.map((month) => {
       const val = safeFromCents(safeToCents(row.amounts[month]));
-      const isCleared = Boolean(row.cleared[month]);
+      const isCleared = row.isVehicleRow ? val > 0 : Boolean(row.cleared[month]);
 
       return (
         <TouchableOpacity
@@ -933,6 +848,8 @@ export default function BudgetScreen() {
             styles.cell,
             { width: monthColWidth },
             row.isShopDebtRow && !isCleared && styles.debtHighlightCell,
+            row.isVehicleRow && !isCleared && styles.vehicleHighlightCell,
+            (row.id === WELFARE_ROW_ID || row.isWelfareRow) && !isCleared && styles.welfareHighlightCell,
             isCleared && styles.clearedCellMark,
           ]}
         >
@@ -947,7 +864,7 @@ export default function BudgetScreen() {
           {isCleared && (
             <View style={styles.clearedPill}>
               <Ionicons name="checkmark-circle" size={10} color="#15803D" />
-              <Text style={styles.clearedPillText}>{t.clearedBadge}</Text>
+              <Text style={styles.clearedPillText}>Cleared</Text>
             </View>
           )}
         </TouchableOpacity>
@@ -957,31 +874,20 @@ export default function BudgetScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* Top Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>
-            {t.budgetTitle} ({fiscalLabel})
-          </Text>
+          <Text style={styles.headerTitle}>Budget ({fiscalLabel})</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            {t.shopDebtSyncHint}
+            Welfare, Shop Debt & Vehicle Synced
           </Text>
         </View>
 
         <TouchableOpacity style={styles.nowBtn} onPress={handleJumpToCurrentMonth}>
-          <Text style={styles.nowBtnText}>{t.now}</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.settingsBtn}
-          onPress={() => setSettingsModalVisible(true)}
-          accessibilityLabel="Settings"
-        >
-          <Ionicons name="settings-outline" size={18} color="#1E293B" />
+          <Text style={styles.nowBtnText}>Now</Text>
         </TouchableOpacity>
 
         <View style={styles.yearBox}>
@@ -995,17 +901,18 @@ export default function BudgetScreen() {
         </View>
       </View>
 
-      {/* Action Bar */}
       <View style={styles.actionBar}>
         <TouchableOpacity
           style={styles.addBtn}
           onPress={() => {
+            setNewRowName('');
+            setNewRowAmount('');
             setNewRowStartMonth(getCurrentFiscalMonthName());
             setAddModalVisible(true);
           }}
         >
           <Ionicons name="add-circle-outline" size={17} color="#FFFFFF" />
-          <Text style={styles.addBtnText}>{t.addCategory}</Text>
+          <Text style={styles.addBtnText}>+ Add Item</Text>
         </TouchableOpacity>
 
         <View style={styles.gridStepGroup}>
@@ -1024,56 +931,58 @@ export default function BudgetScreen() {
         </View>
       </View>
 
-      {/* Fixed Description + Exact Grid-Snap Months */}
       <ScrollView style={styles.verticalScroll}>
         <View style={styles.sheetWrapper}>
-          {/* Left Fixed Column */}
           <View style={[styles.fixedColumn, { width: descColWidth }]}>
             <View style={[styles.headerCell, { width: descColWidth }]}>
-              <Text style={styles.headerCellText}>{t.particulars}</Text>
+              <Text style={styles.headerCellText}>Particulars</Text>
             </View>
 
-            {/* 1. Net Savings */}
             <View style={[styles.summaryCell, styles.netSavingsBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]}>{t.netSavings}</Text>
+              <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]}>Net Savings</Text>
             </View>
 
-            {/* 2. Total Budget */}
             <View style={[styles.summaryCell, styles.totalBudgetBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#0F172A' }]}>{t.totalBudget}</Text>
+              <Text style={[styles.summaryTitle, { color: '#0F172A' }]}>Total Budget</Text>
             </View>
 
-            {/* 3. Extra / Ghatti */}
             <View style={[styles.summaryCell, styles.extraBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#15803D' }]}>{t.extraGhatti}</Text>
+              <Text style={[styles.summaryTitle, { color: '#15803D' }]}>Extra / Ghatti</Text>
             </View>
 
-            {/* Category Rows (দোকানভিত্তিক Shop Debt খাতসহ) */}
-            {rows.map((row) => (
-              <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.descText} numberOfLines={2}>
-                    {getRowDisplayName(row)}
-                  </Text>
-                  {row.isShopDebtRow && (
-                    <Text style={styles.linkedShopBadge}>Shop Debt Sync</Text>
+            {rows.map((row) => {
+              const isWelfare = row.id === WELFARE_ROW_ID || Boolean(row.isWelfareRow);
+              return (
+                <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.descText} numberOfLines={2}>
+                      {row.name}
+                    </Text>
+                    {isWelfare && (
+                      <Text style={styles.linkedWelfareBadge}>Welfare Fund Sync</Text>
+                    )}
+                    {row.isShopDebtRow && (
+                      <Text style={styles.linkedShopBadge}>Shop Debt Sync</Text>
+                    )}
+                    {row.isVehicleRow && (
+                      <Text style={styles.linkedVehicleBadge}>Vehicle Sync • Cash Paid</Text>
+                    )}
+                  </View>
+
+                  {!row.isShopDebtRow && !row.isVehicleRow && !isWelfare && (
+                    <TouchableOpacity
+                      onPress={() => handleDeleteRow(row.id)}
+                      accessibilityLabel="Delete row"
+                      style={{ paddingLeft: 4 }}
+                    >
+                      <Ionicons name="trash-outline" size={15} color="#DC2626" />
+                    </TouchableOpacity>
                   )}
                 </View>
-
-                {!row.isShopDebtRow && (
-                  <TouchableOpacity
-                    onPress={() => handleDeleteRow(row.id)}
-                    accessibilityLabel="Delete row"
-                    style={{ paddingLeft: 4 }}
-                  >
-                    <Ionicons name="trash-outline" size={15} color="#DC2626" />
-                  </TouchableOpacity>
-                )}
-              </View>
-            ))}
+              );
+            })}
           </View>
 
-          {/* Right Exact Grid-Snap Viewport */}
           <View style={{ width: exactRightViewportWidth, overflow: 'hidden' }}>
             <ScrollView
               ref={monthScrollRef}
@@ -1103,7 +1012,7 @@ export default function BudgetScreen() {
                         ]}
                       >
                         <Text style={styles.headerCellText} numberOfLines={1}>
-                          {getMonthDisplayLabel(month, calYear)}
+                          {month.slice(0, 3)} {String(calYear).slice(-2)}
                         </Text>
                       </View>
                     );
@@ -1175,53 +1084,13 @@ export default function BudgetScreen() {
         </View>
       </ScrollView>
 
-      {/* Settings & Language Modal */}
-      <Modal visible={settingsModalVisible} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{t.settingsTitle}</Text>
-            <Text style={styles.inputLabel}>{t.selectLanguage}</Text>
-
-            <View style={{ flexDirection: 'row', gap: 10, marginVertical: 8 }}>
-              <TouchableOpacity
-                style={[styles.langOptionBtn, lang === 'en' && styles.langOptionBtnActive]}
-                onPress={() => handleChangeLanguage('en')}
-              >
-                <Text style={[styles.langOptionText, lang === 'en' && styles.langOptionTextActive]}>
-                  {t.english}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.langOptionBtn, lang === 'bn' && styles.langOptionBtnActive]}
-                onPress={() => handleChangeLanguage('bn')}
-              >
-                <Text style={[styles.langOptionText, lang === 'bn' && styles.langOptionTextActive]}>
-                  {t.bangla}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={() => setSettingsModalVisible(false)}
-              >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>{t.close}</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Edit Cell + Bill Clear Confirmation Modal */}
       <Modal visible={editModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
-              {editingRow ? getRowDisplayName(editingRow) : ''} — {editingMonth} ({fiscalLabel})
+              {editingRow?.name || ''} — {editingMonth} ({fiscalLabel})
             </Text>
-            <Text style={styles.inputLabel}>{t.amountLabel}</Text>
+            <Text style={styles.inputLabel}>Amount (Tk.)</Text>
             <TextInput
               style={styles.modalInput}
               keyboardType="numeric"
@@ -1230,28 +1099,39 @@ export default function BudgetScreen() {
               autoFocus
             />
 
-            <Text style={styles.inputLabel}>{t.billStatusLabel}</Text>
-            <TouchableOpacity
-              style={[
-                styles.clearStatusBtn,
-                editClearedState ? styles.clearStatusBtnActive : styles.clearStatusBtnInactive,
-              ]}
-              onPress={handleRequestToggleClearedWithConfirm}
-            >
-              <Ionicons
-                name={editClearedState ? 'checkmark-circle' : 'ellipse-outline'}
-                size={18}
-                color={editClearedState ? '#15803D' : '#475569'}
-              />
-              <Text
-                style={[
-                  styles.clearStatusBtnText,
-                  { color: editClearedState ? '#14532D' : '#334155' },
-                ]}
-              >
-                {editClearedState ? t.unmarkClearedBtn : t.markClearedBtn}
-              </Text>
-            </TouchableOpacity>
+            {editingRow?.isVehicleRow ? (
+              <View style={styles.vehicleClearedInfoBox}>
+                <Ionicons name="checkmark-circle" size={18} color="#15803D" />
+                <Text style={styles.vehicleClearedInfoText}>
+                  নগদ খরচ হিসেবে Vehicle খাতে স্বয়ংক্রিয়ভাবে Cleared মার্ক সক্রিয় আছে।
+                </Text>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.inputLabel}>Bill Payment Status</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.clearStatusBtn,
+                    editClearedState ? styles.clearStatusBtnActive : styles.clearStatusBtnInactive,
+                  ]}
+                  onPress={handleRequestToggleClearedWithConfirm}
+                >
+                  <Ionicons
+                    name={editClearedState ? 'checkmark-circle' : 'ellipse-outline'}
+                    size={18}
+                    color={editClearedState ? '#15803D' : '#475569'}
+                  />
+                  <Text
+                    style={[
+                      styles.clearStatusBtnText,
+                      { color: editClearedState ? '#14532D' : '#334155' },
+                    ]}
+                  >
+                    {editClearedState ? 'Unmark Cleared Bill' : 'Mark Bill Cleared'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
 
             <TouchableOpacity
               style={styles.checkboxRow}
@@ -1262,7 +1142,7 @@ export default function BudgetScreen() {
                 size={22}
                 color="#2563EB"
               />
-              <Text style={styles.checkboxLabel}>{t.applyForwardLabel}</Text>
+              <Text style={styles.checkboxLabel}>Apply to remaining months up to June</Text>
             </TouchableOpacity>
 
             <View style={styles.modalButtons}>
@@ -1270,54 +1150,77 @@ export default function BudgetScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setEditModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>{t.cancel}</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
                 onPress={handleSaveCell}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>{t.save}</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Save</Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Add Budget Item Modal */}
       <Modal visible={addModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>{t.addItemTitle}</Text>
-            <Text style={styles.inputLabel}>{t.itemNameLabel}</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder="e.g. House Rent, Medical..."
-              value={newRowName}
-              onChangeText={setNewRowName}
-            />
-            <Text style={styles.inputLabel}>{t.amountLabel}</Text>
-            <TextInput
-              style={styles.modalInput}
-              keyboardType="numeric"
-              placeholder="0.00"
-              value={newRowAmount}
-              onChangeText={setNewRowAmount}
-            />
-            <View style={styles.modalButtons}>
-              <TouchableOpacity
-                style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
-                onPress={() => setAddModalVisible(false)}
-              >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>{t.cancel}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
-                onPress={handleAddRow}
-              >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>{t.add}</Text>
-              </TouchableOpacity>
+          <ScrollView
+            contentContainerStyle={{ flexGrow: 1, justifyContent: 'center' }}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.modalCard}>
+              <Text style={styles.modalTitle}>Add New Budget Item</Text>
+
+              <Text style={styles.inputLabel}>Custom Item Name (নিজের মতো নাম লিখুন)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="e.g. House Rent, Medical, Gas..."
+                value={newRowName}
+                onChangeText={setNewRowName}
+              />
+
+              <Text style={styles.inputLabel}>Amount (Tk.) (ঐচ্ছিক)</Text>
+              <TextInput
+                style={styles.modalInput}
+                keyboardType="numeric"
+                placeholder="0.00"
+                value={newRowAmount}
+                onChangeText={setNewRowAmount}
+              />
+
+              <Text style={styles.inputLabel}>
+                Suggestions (চাপলে সরাসরি খাত হিসেবে যুক্ত হবে):
+              </Text>
+              <View style={styles.suggestionsWrap}>
+                {CATEGORY_SUGGESTIONS.map((sug) => (
+                  <TouchableOpacity
+                    key={sug.id}
+                    style={styles.suggestionChip}
+                    onPress={() => handleAddRow(sug.name)}
+                  >
+                    <Ionicons name="add" size={14} color="#1D4ED8" />
+                    <Text style={styles.suggestionChipText}>{sug.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                  onPress={() => setAddModalVisible(false)}
+                >
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
+                  onPress={() => handleAddRow()}
+                >
+                  <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Add Custom</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          </ScrollView>
         </View>
       </Modal>
     </SafeAreaView>
@@ -1338,7 +1241,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
-    gap: 5,
+    gap: 6,
   },
   backBtn: {
     padding: 3,
@@ -1354,7 +1257,7 @@ const styles = StyleSheet.create({
   },
   nowBtn: {
     backgroundColor: '#DCFCE7',
-    paddingHorizontal: 7,
+    paddingHorizontal: 8,
     paddingVertical: 5,
     borderRadius: 6,
   },
@@ -1362,13 +1265,6 @@ const styles = StyleSheet.create({
     color: '#15803D',
     fontWeight: '700',
     fontSize: 11,
-  },
-  settingsBtn: {
-    backgroundColor: '#F1F5F9',
-    padding: 6,
-    borderRadius: 7,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
   },
   yearBox: {
     flexDirection: 'row',
@@ -1498,10 +1394,22 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#1E293B',
   },
+  linkedWelfareBadge: {
+    fontSize: 8.5,
+    fontWeight: '700',
+    color: '#0369A1',
+    marginTop: 1,
+  },
   linkedShopBadge: {
     fontSize: 8.5,
     fontWeight: '700',
     color: '#1D4ED8',
+    marginTop: 1,
+  },
+  linkedVehicleBadge: {
+    fontSize: 8.5,
+    fontWeight: '700',
+    color: '#047857',
     marginTop: 1,
   },
   cell: {
@@ -1513,8 +1421,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 5,
     backgroundColor: '#FFFFFF',
   },
+  welfareHighlightCell: {
+    backgroundColor: '#F0F9FF',
+  },
   debtHighlightCell: {
     backgroundColor: '#FEFCE8',
+  },
+  vehicleHighlightCell: {
+    backgroundColor: '#ECFDF5',
   },
   clearedCellMark: {
     backgroundColor: '#BBF7D0',
@@ -1538,6 +1452,23 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#15803D',
   },
+  vehicleClearedInfoBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#DCFCE7',
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+  },
+  vehicleClearedInfoText: {
+    flex: 1,
+    fontSize: 11.5,
+    fontWeight: '600',
+    color: '#14532D',
+  },
   clearStatusBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1560,26 +1491,27 @@ const styles = StyleSheet.create({
     fontSize: 12.5,
     fontWeight: '700',
   },
-  langOptionBtn: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
+  suggestionsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 10,
+  },
+  suggestionChip: {
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    gap: 3,
+    paddingHorizontal: 9,
+    paddingVertical: 6,
+    borderRadius: 16,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
   },
-  langOptionBtnActive: {
-    backgroundColor: '#2563EB',
-    borderColor: '#2563EB',
-  },
-  langOptionText: {
-    fontSize: 12.5,
-    fontWeight: '700',
-    color: '#334155',
-  },
-  langOptionTextActive: {
-    color: '#FFFFFF',
+  suggestionChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#1E3A8A',
   },
   checkboxRow: {
     flexDirection: 'row',

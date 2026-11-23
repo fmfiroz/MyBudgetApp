@@ -147,6 +147,28 @@ function getYearMonthForFiscalMonth(month: string, startYear: number): string {
   return `${calYear}-${mm}`;
 }
 
+/**
+ * Budget-এর কোনো মাস `month` (যেমন November)-এর জন্য
+ * Income যে মাস থেকে আসবে (যেমন October) সেই মাসের নাম ও fiscal startYear নির্ণয় করে।
+ */
+function getPreviousFiscalMonthSource(
+  month: string,
+  startYear: number
+): { sourceMonth: string; sourceStartYear: number } {
+  const idx = FISCAL_MONTHS.indexOf(month);
+  if (idx > 0) {
+    return {
+      sourceMonth: FISCAL_MONTHS[idx - 1],
+      sourceStartYear: startYear,
+    };
+  }
+  // July হলে আগের অর্থবছরের June থেকে Income আসবে
+  return {
+    sourceMonth: 'June',
+    sourceStartYear: startYear - 1,
+  };
+}
+
 function getCurrentFiscalMonthName(): string {
   const jsMonth = new Date().getMonth();
   const names = [
@@ -408,7 +430,6 @@ export default function BudgetScreen() {
         }
       }
 
-      // Welfare Fund খাত সর্বদা বাজেটে থাকবে যাতে ইউজার Welfare-এর জন্য বাজেট রাখতে পারে
       const hasWelfare = baseRows.some(
         (r) => r.id === WELFARE_ROW_ID || r.isWelfareRow
       );
@@ -422,7 +443,6 @@ export default function BudgetScreen() {
         });
       }
 
-      // ১. Shop Debt পেজ থেকে দোকান অনুযায়ী খাত যুক্ত/আপডেট করা
       validShops.forEach((shop) => {
         const rowId = getBudgetRowIdForShop(shop.id);
         const existingIdx = baseRows.findIndex(
@@ -450,7 +470,6 @@ export default function BudgetScreen() {
         }
       });
 
-      // ২. Vehicle Expense পেজের প্রতিটি গাড়ির নামে আলাদা খাত যুক্ত/আপডেট করা
       vehicleData.vehicles.forEach((veh) => {
         const vRowId = `cat-veh-${veh.vehicleId}`;
         const existingIdx = baseRows.findIndex(
@@ -483,14 +502,17 @@ export default function BudgetScreen() {
       for (const month of FISCAL_MONTHS) {
         const ym = getYearMonthForFiscalMonth(month, startYr);
         const prevYM = getPrevYearMonth(ym);
+        const { sourceMonth, sourceStartYear } = getPreviousFiscalMonthSource(month, startYr);
 
-        const [combinedIncome, savingsAmt, budgetRaw] = await Promise.all([
-          getCombinedIncomeForMonth(month, startYr),
+        // উদাহরণ: Budget-এর November কলামে October-এর Income থেকে November-এর Savings বাদ যাবে
+        const [prevMonthIncome, currentMonthSavingsAmt, budgetRaw] = await Promise.all([
+          getCombinedIncomeForMonth(sourceMonth, sourceStartYear),
           getSavingsForYearMonth(ym),
           AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`),
         ]);
 
-        const netSavCents = safeToCents(combinedIncome) - safeToCents(savingsAmt);
+        const netSavCents =
+          safeToCents(prevMonthIncome) - safeToCents(currentMonthSavingsAmt);
         netSavMap[month] = safeFromCents(netSavCents);
 
         const parsedMonth: Partial<MonthlyBudgetStorage> = budgetRaw
@@ -882,7 +904,7 @@ export default function BudgetScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Budget ({fiscalLabel})</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            Welfare, Shop Debt & Vehicle Synced
+            Prev Month Income − Current Month Savings
           </Text>
         </View>
 

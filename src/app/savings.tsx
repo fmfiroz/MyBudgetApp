@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 import { getCombinedIncomeForMonth } from '../utils/incomeSyncHelper';
 
-export type SavingsCategoryType = 'Insurance' | 'DPS' | 'Others';
+export type SavingsCategoryType = 'Insurance' | 'DPS' | 'Loan EMI' | 'Others';
 
 const FISCAL_MONTHS = [
   'July',
@@ -103,6 +103,29 @@ function getYearMonthForFiscalMonth(month: string, startYear: number): string {
   const calYear = getMonthCalendarYear(month, startYear);
   const mm = MONTH_NAME_TO_NUM[month] || '01';
   return `${calYear}-${mm}`;
+}
+
+/**
+ * বর্তমান অর্থবছরের একটি মাসের জন্য ঠিক আগের মাসের নাম ও অর্থবছর বের করে।
+ * যেমন: December (2026-27) -> November (2026-27)
+ * এবং July (2026-27) -> June (2025-26)
+ */
+function getPreviousMonthAndFiscalYear(
+  month: string,
+  startYear: number
+): { prevMonth: string; prevFiscalStartYear: number } {
+  const idx = FISCAL_MONTHS.indexOf(month);
+  if (idx <= 0) {
+    // July-এর আগের মাস আগের অর্থবছরের June
+    return {
+      prevMonth: FISCAL_MONTHS[FISCAL_MONTHS.length - 1], // 'June'
+      prevFiscalStartYear: startYear - 1,
+    };
+  }
+  return {
+    prevMonth: FISCAL_MONTHS[idx - 1],
+    prevFiscalStartYear: startYear,
+  };
 }
 
 function getCurrentFiscalMonthName(): string {
@@ -210,6 +233,7 @@ export default function SavingsScreen() {
   const [deleteConfirmTypedText, setDeleteConfirmTypedText] = useState<string>('');
 
   const fiscalLabel = formatFiscalYearLabel(fiscalStartYear);
+  const isLoanEmiSelected = selectedType === 'Loan EMI';
 
   const syncMonthlySavingsToBudget = useCallback(
     async (startYr: number, planList: SavingsPlanItem[]) => {
@@ -217,16 +241,28 @@ export default function SavingsScreen() {
         const month = FISCAL_MONTHS[mIdx];
         const ym = getYearMonthForFiscalMonth(month, startYr);
 
-        const totalCents = planList.reduce((sumCents, item) => {
+        let savingsOnlyCents = 0;
+        let loanEmiCents = 0;
+
+        for (const item of planList) {
           const st = getItemStateForMonth(item, startYr, mIdx);
-          return sumCents + safeToCents(st.activeAmount);
-        }, 0);
+          const activeCents = safeToCents(st.activeAmount);
+          if (item.type === 'Loan EMI') {
+            loanEmiCents += activeCents;
+          } else {
+            savingsOnlyCents += activeCents;
+          }
+        }
+
+        const totalCombinedCents = savingsOnlyCents + loanEmiCents;
 
         await AsyncStorage.setItem(
           `${SAVINGS_MONTH_KEY_PREFIX}${ym}`,
           JSON.stringify({
             yearMonth: ym,
-            totalSavings: safeFromCents(totalCents),
+            totalSavings: safeFromCents(totalCombinedCents),
+            savingsOnly: safeFromCents(savingsOnlyCents),
+            loanEmiTotal: safeFromCents(loanEmiCents),
             updatedAt: new Date().toISOString(),
           })
         );
@@ -245,10 +281,14 @@ export default function SavingsScreen() {
         const validPlans = Array.isArray(parsedPlans) ? parsedPlans : [];
         setPlans(validPlans);
 
-        // সব Income Sheet (Salary + Daily + Business + Custom)-এর সম্মিলিত মাসিক আয় লোড করা
+        // আগের মাসের আয় বর্তমান মাসে নিয়ে আসা (যেমন: November-এর আয় December-এ বসবে)
         const netMap: { [month: string]: number } = {};
         for (const month of FISCAL_MONTHS) {
-          netMap[month] = await getCombinedIncomeForMonth(month, startYr);
+          const { prevMonth, prevFiscalStartYear } = getPreviousMonthAndFiscalYear(
+            month,
+            startYr
+          );
+          netMap[month] = await getCombinedIncomeForMonth(prevMonth, prevFiscalStartYear);
         }
         setIncomeNetByMonth(netMap);
 
@@ -346,7 +386,7 @@ export default function SavingsScreen() {
     const meyad = Math.max(1, parseInt(meyadMonthsInput.replace(/[^0-9]/g, ''), 10) || 1);
 
     if (!cleanName) {
-      Alert.alert('তথ্য অসম্পূর্ণ', 'Savings / Policy / Scheme-এর নাম লিখুন।');
+      Alert.alert('তথ্য অসম্পূর্ণ', 'Savings / Policy / Loan EMI-এর নাম লিখুন।');
       return;
     }
     if (amtCents <= 0) {
@@ -408,23 +448,36 @@ export default function SavingsScreen() {
     const map: {
       [month: string]: {
         incomeNet: number;
-        totalSavings: number;
+        totalSavingsOnly: number;
+        totalLoanEmi: number;
+        totalDeductions: number;
         balanceAfterSavings: number;
       };
     } = {};
 
     FISCAL_MONTHS.forEach((month, mIdx) => {
       const incCents = safeToCents(incomeNetByMonth[month]);
-      const savCents = plans.reduce((sum, item) => {
-        const st = getItemStateForMonth(item, fiscalStartYear, mIdx);
-        return sum + safeToCents(st.activeAmount);
-      }, 0);
+      let savOnlyCents = 0;
+      let loanEmiCents = 0;
 
-      const remCents = incCents - savCents;
+      plans.forEach((item) => {
+        const st = getItemStateForMonth(item, fiscalStartYear, mIdx);
+        const amtCents = safeToCents(st.activeAmount);
+        if (item.type === 'Loan EMI') {
+          loanEmiCents += amtCents;
+        } else {
+          savOnlyCents += amtCents;
+        }
+      });
+
+      const totalDedCents = savOnlyCents + loanEmiCents;
+      const remCents = incCents - totalDedCents;
 
       map[month] = {
         incomeNet: safeFromCents(incCents),
-        totalSavings: safeFromCents(savCents),
+        totalSavingsOnly: safeFromCents(savOnlyCents),
+        totalLoanEmi: safeFromCents(loanEmiCents),
+        totalDeductions: safeFromCents(totalDedCents),
         balanceAfterSavings: safeFromCents(remCents),
       };
     });
@@ -433,6 +486,7 @@ export default function SavingsScreen() {
   }, [incomeNetByMonth, plans, fiscalStartYear]);
 
   const renderMonthCellsForPlan = (plan: SavingsPlanItem) => {
+    const isLoan = plan.type === 'Loan EMI';
     return FISCAL_MONTHS.map((month, mIdx) => {
       const st = getItemStateForMonth(plan, fiscalStartYear, mIdx);
       return (
@@ -441,13 +495,14 @@ export default function SavingsScreen() {
           style={[
             styles.cell,
             { width: monthColWidth },
-            st.isWithinMeyad && styles.activeSavingsCellBg,
+            st.isWithinMeyad && (isLoan ? styles.activeLoanCellBg : styles.activeSavingsCellBg),
             !st.isWithinMeyad && styles.inactiveCellBg,
           ]}
         >
           <Text
             style={[
               styles.cellAmountText,
+              isLoan && st.isWithinMeyad && { color: '#9A3412' },
               !st.isWithinMeyad && { color: '#94A3B8' },
             ]}
           >
@@ -456,7 +511,9 @@ export default function SavingsScreen() {
           <Text
             style={[
               styles.meyadTagText,
-              st.isWithinMeyad ? { color: '#15803D' } : { color: '#64748B' },
+              st.isWithinMeyad
+                ? { color: isLoan ? '#C2410C' : '#15803D' }
+                : { color: '#64748B' },
             ]}
           >
             {st.isWithinMeyad ? `${plan.durationMonths}m` : 'Ended'}
@@ -474,9 +531,9 @@ export default function SavingsScreen() {
         </TouchableOpacity>
 
         <View style={{ flex: 1 }}>
-          <Text style={styles.headerTitle}>Savings ({fiscalLabel})</Text>
+          <Text style={styles.headerTitle}>Savings & Loan EMI ({fiscalLabel})</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            All Income Sources Synced • Net - Total Savings
+            Prev Month Income → Next Month • Net - (Savings + EMI)
           </Text>
         </View>
 
@@ -504,7 +561,7 @@ export default function SavingsScreen() {
           }}
         >
           <Ionicons name="add-circle-outline" size={17} color="#FFFFFF" />
-          <Text style={styles.addBtnText}>+ Add Savings / Policy / Scheme</Text>
+          <Text style={styles.addBtnText}>+ Add Savings / Policy / Loan EMI</Text>
         </TouchableOpacity>
 
         <View style={styles.gridStepGroup}>
@@ -527,27 +584,37 @@ export default function SavingsScreen() {
         <View style={styles.sheetWrapper}>
           <View style={[styles.fixedColumn, { width: descColWidth }]}>
             <View style={[styles.headerCell, { width: descColWidth }]}>
-              <Text style={styles.headerCellText}>Policy / Scheme</Text>
+              <Text style={styles.headerCellText}>Savings / Loan EMI</Text>
             </View>
 
             <View style={[styles.summaryCell, styles.incomeNetBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]}>Income Net</Text>
+              <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]} numberOfLines={1}>
+                Income (Prev Mo)
+              </Text>
             </View>
 
             <View style={[styles.summaryCell, styles.totalSavingsBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#B91C1C' }]}>
-                Total Savings (-)
+              <Text style={[styles.summaryTitle, { color: '#B91C1C' }]} numberOfLines={1}>
+                Savings (-)
+              </Text>
+            </View>
+
+            <View style={[styles.summaryCell, styles.totalLoanEmiBg, { width: descColWidth }]}>
+              <Text style={[styles.summaryTitle, { color: '#C2410C' }]} numberOfLines={1}>
+                Loan EMI (-)
               </Text>
             </View>
 
             <View style={[styles.summaryCell, styles.balanceAfterBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#15803D' }]}>Net Balance</Text>
+              <Text style={[styles.summaryTitle, { color: '#15803D' }]} numberOfLines={1}>
+                Net Balance
+              </Text>
             </View>
 
             {plans.length === 0 ? (
               <View style={[styles.emptyFixedBox, { width: descColWidth }]}>
                 <Text style={styles.emptyFixedText}>
-                  কোনো সেভিংস নেই। উপরে + Add দিয়ে যোগ করুন।
+                  কোনো সেভিংস বা Loan EMI নেই। উপরে + Add দিয়ে যোগ করুন।
                 </Text>
               </View>
             ) : (
@@ -557,6 +624,7 @@ export default function SavingsScreen() {
                   now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
                 const nowIdx = Math.max(0, FISCAL_MONTHS.indexOf(getCurrentFiscalMonthName()));
                 const st = getItemStateForMonth(plan, nowStartYear, nowIdx);
+                const isLoan = plan.type === 'Loan EMI';
 
                 const subParts: string[] = [plan.type];
                 if (plan.companyName) subParts.push(plan.companyName);
@@ -564,9 +632,19 @@ export default function SavingsScreen() {
                 subParts.push(`${plan.durationMonths}m`);
 
                 return (
-                  <View key={plan.id} style={[styles.descCell, { width: descColWidth }]}>
+                  <View
+                    key={plan.id}
+                    style={[
+                      styles.descCell,
+                      isLoan && styles.loanDescCellBg,
+                      { width: descColWidth },
+                    ]}
+                  >
                     <View style={{ flex: 1, marginRight: 4 }}>
-                      <Text style={styles.descTitle} numberOfLines={1}>
+                      <Text
+                        style={[styles.descTitle, isLoan && { color: '#9A3412' }]}
+                        numberOfLines={1}
+                      >
                         {plan.name}
                       </Text>
                       <Text style={styles.descMeta} numberOfLines={1}>
@@ -581,7 +659,7 @@ export default function SavingsScreen() {
                         styles.deleteIconBtn,
                         st.isExpiredByNow && styles.expiredDeleteHighlight,
                       ]}
-                      accessibilityLabel="Delete savings item"
+                      accessibilityLabel="Delete item"
                     >
                       <Ionicons
                         name="trash-outline"
@@ -632,16 +710,22 @@ export default function SavingsScreen() {
                 </View>
 
                 <View style={styles.row}>
-                  {FISCAL_MONTHS.map((month) => (
-                    <View
-                      key={month}
-                      style={[styles.summaryCell, styles.incomeNetBg, { width: monthColWidth }]}
-                    >
-                      <Text style={[styles.summaryValue, { color: '#1E3A8A' }]}>
-                        {formatMoney(monthlySummary[month]?.incomeNet || 0)}
-                      </Text>
-                    </View>
-                  ))}
+                  {FISCAL_MONTHS.map((month) => {
+                    const { prevMonth } = getPreviousMonthAndFiscalYear(month, fiscalStartYear);
+                    return (
+                      <View
+                        key={month}
+                        style={[styles.summaryCell, styles.incomeNetBg, { width: monthColWidth }]}
+                      >
+                        <Text style={[styles.summaryValue, { color: '#1E3A8A' }]}>
+                          {formatMoney(monthlySummary[month]?.incomeNet || 0)}
+                        </Text>
+                        <Text style={styles.prevMonthHintText}>
+                          from {prevMonth.slice(0, 3)}
+                        </Text>
+                      </View>
+                    );
+                  })}
                 </View>
 
                 <View style={styles.row}>
@@ -655,7 +739,24 @@ export default function SavingsScreen() {
                       ]}
                     >
                       <Text style={[styles.summaryValue, { color: '#B91C1C' }]}>
-                        -{formatMoney(monthlySummary[month]?.totalSavings || 0)}
+                        -{formatMoney(monthlySummary[month]?.totalSavingsOnly || 0)}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+
+                <View style={styles.row}>
+                  {FISCAL_MONTHS.map((month) => (
+                    <View
+                      key={month}
+                      style={[
+                        styles.summaryCell,
+                        styles.totalLoanEmiBg,
+                        { width: monthColWidth },
+                      ]}
+                    >
+                      <Text style={[styles.summaryValue, { color: '#C2410C' }]}>
+                        -{formatMoney(monthlySummary[month]?.totalLoanEmi || 0)}
                       </Text>
                     </View>
                   ))}
@@ -706,18 +807,23 @@ export default function SavingsScreen() {
       <Modal visible={addModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>নতুন Savings / Policy / Scheme যুক্ত করুন</Text>
+            <Text style={styles.modalTitle}>নতুন Savings / Policy / Loan EMI যুক্ত করুন</Text>
 
             <Text style={styles.inputLabel}>ধরন (Type)</Text>
             <View style={styles.typeRow}>
-              {(['Insurance', 'DPS', 'Others'] as SavingsCategoryType[]).map((tp) => (
+              {(['Insurance', 'DPS', 'Loan EMI', 'Others'] as SavingsCategoryType[]).map((tp) => (
                 <TouchableOpacity
                   key={tp}
-                  style={[styles.typeChip, selectedType === tp && styles.typeChipActive]}
+                  style={[
+                    styles.typeChip,
+                    selectedType === tp &&
+                      (tp === 'Loan EMI' ? styles.typeChipLoanActive : styles.typeChipActive),
+                  ]}
                   onPress={() => setSelectedType(tp)}
                 >
                   <Text
                     style={[styles.typeChipText, selectedType === tp && styles.typeChipTextActive]}
+                    numberOfLines={1}
                   >
                     {tp}
                   </Text>
@@ -725,35 +831,51 @@ export default function SavingsScreen() {
               ))}
             </View>
 
-            <Text style={styles.inputLabel}>Savings / Policy / Scheme Name *</Text>
+            <Text style={styles.inputLabel}>
+              {isLoanEmiSelected ? 'Loan / EMI Name *' : 'Savings / Policy / Scheme Name *'}
+            </Text>
             <TextInput
               style={styles.modalInput}
-              placeholder="e.g. Jibon Bima Policy, Monthly DPS..."
+              placeholder={
+                isLoanEmiSelected
+                  ? 'e.g. Home Loan, Bike Loan, Personal Loan...'
+                  : 'e.g. Jibon Bima Policy, Monthly DPS...'
+              }
               value={itemName}
               onChangeText={setItemName}
             />
 
-            <Text style={styles.inputLabel}>Company Name (Optional)</Text>
+            <Text style={styles.inputLabel}>
+              {isLoanEmiSelected ? 'Bank / Lender Name (Optional)' : 'Company Name (Optional)'}
+            </Text>
             <TextInput
               style={styles.modalInput}
-              placeholder="e.g. MetLife, DBBL, Islami Bank (ঐচ্ছিক)"
+              placeholder={
+                isLoanEmiSelected
+                  ? 'e.g. Sonali Bank, DBBL, BRAC Bank (ঐচ্ছিক)'
+                  : 'e.g. MetLife, DBBL, Islami Bank (ঐচ্ছিক)'
+              }
               value={companyNameInput}
               onChangeText={setCompanyNameInput}
             />
 
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 1.2 }}>
-                <Text style={styles.inputLabel}>Policy No.</Text>
+                <Text style={styles.inputLabel}>
+                  {isLoanEmiSelected ? 'Loan A/C No.' : 'Policy No.'}
+                </Text>
                 <TextInput
                   style={styles.modalInput}
-                  placeholder="e.g. POL-984512"
+                  placeholder={isLoanEmiSelected ? 'e.g. LN-45821' : 'e.g. POL-984512'}
                   value={policyNoInput}
                   onChangeText={setPolicyNoInput}
                 />
               </View>
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Amount (Tk.) *</Text>
+                <Text style={styles.inputLabel}>
+                  {isLoanEmiSelected ? 'Monthly EMI (Tk.) *' : 'Amount (Tk.) *'}
+                </Text>
                 <TextInput
                   style={styles.modalInput}
                   keyboardType="numeric"
@@ -766,7 +888,9 @@ export default function SavingsScreen() {
 
             <View style={{ flexDirection: 'row', gap: 10, alignItems: 'center' }}>
               <View style={{ flex: 0.85 }}>
-                <Text style={styles.inputLabel}>মেয়াদ (মাস)</Text>
+                <Text style={styles.inputLabel}>
+                  {isLoanEmiSelected ? 'কিস্তি (মাস)' : 'মেয়াদ (মাস)'}
+                </Text>
                 <TextInput
                   style={styles.modalInput}
                   keyboardType="numeric"
@@ -809,7 +933,10 @@ export default function SavingsScreen() {
                 <Text style={{ color: '#334155', fontWeight: '600' }}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
+                style={[
+                  styles.modalBtn,
+                  { backgroundColor: isLoanEmiSelected ? '#EA580C' : '#16A34A' },
+                ]}
                 onPress={handleAddSavingsPlan}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Save</Text>
@@ -828,12 +955,20 @@ export default function SavingsScreen() {
 
             {deleteTargetPlan && (
               <View style={styles.deleteSummaryBox}>
-                <Text style={styles.deletePlanName}>Name: {deleteTargetPlan.name}</Text>
+                <Text style={styles.deletePlanName}>
+                  Name: {deleteTargetPlan.name} ({deleteTargetPlan.type})
+                </Text>
                 {deleteTargetPlan.companyName ? (
-                  <Text style={styles.deletePlanSub}>Company: {deleteTargetPlan.companyName}</Text>
+                  <Text style={styles.deletePlanSub}>
+                    {deleteTargetPlan.type === 'Loan EMI' ? 'Bank/Lender' : 'Company'}:{' '}
+                    {deleteTargetPlan.companyName}
+                  </Text>
                 ) : null}
                 {deleteTargetPlan.policyNo ? (
-                  <Text style={styles.deletePlanSub}>Policy No.: {deleteTargetPlan.policyNo}</Text>
+                  <Text style={styles.deletePlanSub}>
+                    {deleteTargetPlan.type === 'Loan EMI' ? 'Loan A/C' : 'Policy No.'}:{' '}
+                    {deleteTargetPlan.policyNo}
+                  </Text>
                 ) : null}
                 <Text style={styles.deletePlanSub}>
                   Amount: {formatMoney(deleteTargetPlan.amount)} Tk. • Meyad:{' '}
@@ -1036,6 +1171,9 @@ const styles = StyleSheet.create({
   totalSavingsBg: {
     backgroundColor: '#FEE2E2',
   },
+  totalLoanEmiBg: {
+    backgroundColor: '#FFEDD5',
+  },
   balanceAfterBg: {
     backgroundColor: '#DCFCE7',
   },
@@ -1048,6 +1186,13 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     textAlign: 'right',
   },
+  prevMonthHintText: {
+    fontSize: 8.5,
+    fontWeight: '600',
+    color: '#1D4ED8',
+    textAlign: 'right',
+    marginTop: 1,
+  },
   descCell: {
     height: 54,
     flexDirection: 'row',
@@ -1057,6 +1202,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#CBD5E1',
     backgroundColor: '#F8FAFC',
+  },
+  loanDescCellBg: {
+    backgroundColor: '#FFF7ED',
   },
   descTitle: {
     fontSize: 11.5,
@@ -1086,6 +1234,9 @@ const styles = StyleSheet.create({
   },
   activeSavingsCellBg: {
     backgroundColor: '#FFFFFF',
+  },
+  activeLoanCellBg: {
+    backgroundColor: '#FFFBEB',
   },
   inactiveCellBg: {
     backgroundColor: '#F8FAFC',
@@ -1148,12 +1299,13 @@ const styles = StyleSheet.create({
   },
   typeRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
     marginBottom: 6,
   },
   typeChip: {
     flex: 1,
     paddingVertical: 8,
+    paddingHorizontal: 4,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#CBD5E1',
@@ -1164,8 +1316,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#2563EB',
     borderColor: '#2563EB',
   },
+  typeChipLoanActive: {
+    backgroundColor: '#EA580C',
+    borderColor: '#EA580C',
+  },
   typeChipText: {
-    fontSize: 12,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#334155',
   },

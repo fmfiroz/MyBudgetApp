@@ -12,7 +12,6 @@ export interface AuthSessionState {
 
 const SESSION_STORAGE_KEY = '@mybudget_auth_session_v1';
 const PENDING_MIGRATION_KEY = '@mybudget_pending_guest_migration_v1';
-// লোকাল স্টোরেজে থাকা বর্তমান ডেটার মালিক কে ('guest' নাকি নির্দিষ্ট Firebase UID)
 const LOCAL_DATA_OWNER_KEY = '@mybudget_local_data_owner_v1';
 
 const APP_DATA_PREFIXES = [
@@ -24,7 +23,6 @@ const APP_DATA_PREFIXES = [
   '@mybudget_debt_shops_',
   '@mybudget_welfare_',
   '@vehicle_',
-  '@mybudget_app_language_',
 ];
 
 export async function getAuthSession(): Promise<AuthSessionState> {
@@ -66,7 +64,6 @@ export async function clearAllLocalUserFinanceData(): Promise<void> {
 export async function startGuestSession(): Promise<AuthSessionState> {
   const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
 
-  // যদি আগে কোনো রেজিস্টার্ড ইউজারের ডেটা লোকালে থেকে থাকে, তবে গেস্ট শুরু করার আগে তা মুছে ফেলা হবে
   if (currentOwner && currentOwner !== 'guest') {
     await clearAllLocalUserFinanceData();
   }
@@ -137,20 +134,18 @@ export async function collectAllLocalAppData(): Promise<Record<string, unknown>>
   return snapshot;
 }
 
-/**
- * Login বা Registration-এর পর কল হবে:
- * - যদি লোকাল ডেটা 'guest'-এর হয় (অথবা মালিক সেট না থাকে), তবে নতুন অ্যাকাউন্টে সিঙ্ক করবে।
- * - যদি লোকাল ডেটা অন্য কোনো রেজিস্টার্ড ইউজারের হয় (owner !== userId), তবে আগের ইউজারের ডেটা মুছে ফেলবে যাতে মিশে না যায়।
- */
 export async function syncGuestLocalDataOnRegistration(params: {
   userId: string;
   email?: string | null;
   displayName?: string | null;
   cloudSyncFn?: (userId: string, localData: Record<string, unknown>) => Promise<void>;
+  cloudPullAndMergeFn?: (
+    userId: string,
+    localData: Record<string, unknown>
+  ) => Promise<Record<string, unknown> | void>;
 }): Promise<{ syncedCount: number; clearedOtherUser: boolean; queuedForRetry: boolean }> {
   const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
 
-  // অন্য কোনো রেজিস্টার্ড অ্যাকাউন্টের ডেটা লোকালে থাকলে তা পরিষ্কার করে দেওয়া
   if (currentOwner && currentOwner !== 'guest' && currentOwner !== params.userId) {
     await clearAllLocalUserFinanceData();
     await setRegisteredSession({
@@ -158,6 +153,9 @@ export async function syncGuestLocalDataOnRegistration(params: {
       email: params.email,
       displayName: params.displayName,
     });
+    if (params.cloudPullAndMergeFn) {
+      await params.cloudPullAndMergeFn(params.userId, {});
+    }
     return { syncedCount: 0, clearedOtherUser: true, queuedForRetry: false };
   }
 
@@ -170,15 +168,10 @@ export async function syncGuestLocalDataOnRegistration(params: {
     displayName: params.displayName,
   });
 
-  if (syncedCount === 0) {
-    return { syncedCount: 0, clearedOtherUser: false, queuedForRetry: false };
-  }
-
-  if (params.cloudSyncFn) {
+  if (syncedCount > 0 && params.cloudSyncFn) {
     try {
       await params.cloudSyncFn(params.userId, localData);
       await AsyncStorage.removeItem(PENDING_MIGRATION_KEY);
-      return { syncedCount, clearedOtherUser: false, queuedForRetry: false };
     } catch {
       await AsyncStorage.setItem(
         PENDING_MIGRATION_KEY,
@@ -189,6 +182,21 @@ export async function syncGuestLocalDataOnRegistration(params: {
         })
       );
       return { syncedCount, clearedOtherUser: false, queuedForRetry: true };
+    }
+  }
+
+  if (params.cloudPullAndMergeFn) {
+    try {
+      const mergedData = await params.cloudPullAndMergeFn(params.userId, localData);
+      if (mergedData && Object.keys(mergedData).length > 0) {
+        const entries: [string, string][] = Object.entries(mergedData).map(([k, v]) => [
+          k,
+          typeof v === 'string' ? v : JSON.stringify(v),
+        ]);
+        await AsyncStorage.multiSet(entries);
+      }
+    } catch (e) {
+      console.log('Cloud pull/merge failed:', e);
     }
   }
 

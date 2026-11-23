@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { signOut } from 'firebase/auth';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -187,6 +188,15 @@ export default function HomeScreen() {
     try {
       setLoggingOut(true);
       setDrawerVisible(false);
+
+      if (Platform.OS !== 'web') {
+        try {
+          await GoogleSignin.signOut();
+        } catch {
+          // নন-গুগল সেশনে এরর আসলে ইগনোর করা হবে
+        }
+      }
+
       await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
       if (auth.currentUser) {
         await clearAllLocalUserFinanceData();
@@ -200,6 +210,7 @@ export default function HomeScreen() {
       } else {
         Alert.alert('Logout Failed', message);
       }
+    } finally {
       setLoggingOut(false);
     }
   };
@@ -249,7 +260,6 @@ export default function HomeScreen() {
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Modern Top App Bar with Drawer Trigger */}
       <View style={styles.topBar}>
         <TouchableOpacity
           style={styles.menuTriggerBtn}
@@ -279,7 +289,6 @@ export default function HomeScreen() {
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-        {/* Guest Mode Banner to Register & Sync */}
         {isGuestMode && (
           <View style={styles.guestBannerCard}>
             <View style={{ flex: 1 }}>
@@ -305,7 +314,6 @@ export default function HomeScreen() {
           </View>
         )}
 
-        {/* Hero Banner Card */}
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Ionicons name="sparkles" size={13} color="#1D4ED8" />
@@ -325,7 +333,6 @@ export default function HomeScreen() {
           </Text>
         </View>
 
-        {/* Modules Section */}
         <View style={styles.sectionContainer}>
           <View style={styles.sectionHeaderRow}>
             <Text style={styles.sectionTitle}>
@@ -374,7 +381,6 @@ export default function HomeScreen() {
         </View>
       </ScrollView>
 
-      {/* Slide-From-Left Drawer Modal */}
       <Modal
         visible={drawerVisible}
         transparent

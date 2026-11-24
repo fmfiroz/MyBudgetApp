@@ -1,5 +1,10 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { auth } from '../firebase';
+import {
+  getPendingLocalChangesForUser,
+  startFirebaseSync,
+} from './firebaseSync';
 
 export type SessionMode = 'guest' | 'registered' | null;
 
@@ -14,6 +19,10 @@ export interface AuthSessionState {
 const SESSION_STORAGE_KEY = '@mybudget_auth_session_v1';
 const PENDING_MIGRATION_KEY = '@mybudget_pending_guest_migration_v1';
 const LOCAL_DATA_OWNER_KEY = '@mybudget_local_data_owner_v1';
+const LOCAL_ACCOUNT_SNAPSHOT_PREFIX = '@mybudget_local_account_v1_';
+const UNASSIGNED_LEGACY_DATA_KEY = '@mybudget_legacy_unassigned_v1';
+
+export type ConfirmLegacyDataImport = (dataGroupCount: number) => Promise<boolean>;
 
 const APP_DATA_PREFIXES = [
   '@income_fy_',
@@ -23,6 +32,10 @@ const APP_DATA_PREFIXES = [
   '@mybudget_savings_monthly_v1_',
   '@mybudget_shop_debt_',
   '@mybudget_shop_debt_v2_',
+  '@mybudget_shop_debt_v3_',
+  '@mybudget_budget_shop_debt_link_',
+  '@mybudget_shop_product_catalog_v2',
+  '@mybudget_shop_unit_usage_v1',
   '@mybudget_debt_shops_',
   '@mybudget_welfare_',
   '@vehicle_',
@@ -93,11 +106,105 @@ export async function clearAllLocalUserFinanceData(): Promise<void> {
   }
 }
 
-export async function startGuestSession(): Promise<AuthSessionState> {
+function getLocalAccountSnapshotKey(userId: string): string {
+  return `${LOCAL_ACCOUNT_SNAPSHOT_PREFIX}${encodeURIComponent(userId)}`;
+}
+
+async function saveLocalAccountSnapshot(
+  userId: string,
+  snapshot: Record<string, unknown>
+): Promise<void> {
+  if (Object.keys(snapshot).length === 0) return;
+
+  await AsyncStorage.setItem(
+    getLocalAccountSnapshotKey(userId),
+    JSON.stringify(snapshot)
+  );
+}
+
+async function getLocalAccountSnapshot(
+  userId: string
+): Promise<Record<string, unknown>> {
+  const raw = await AsyncStorage.getItem(getLocalAccountSnapshotKey(userId));
+  if (!raw) return {};
+
+  try {
+    const snapshot = JSON.parse(raw) as Record<string, unknown>;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      throw new Error('Local account snapshot has an invalid format.');
+    }
+    return snapshot;
+  } catch (error) {
+    console.error('Unable to read the local account snapshot:', error);
+    throw error;
+  }
+}
+
+async function readUnassignedLegacyData(): Promise<Record<string, unknown>> {
+  const raw = await AsyncStorage.getItem(UNASSIGNED_LEGACY_DATA_KEY);
+  if (!raw) return {};
+
+  try {
+    const snapshot = JSON.parse(raw) as Record<string, unknown>;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      throw new Error('Unassigned local data has an invalid format.');
+    }
+    return snapshot;
+  } catch (error) {
+    console.error('Unable to read unassigned local data:', error);
+    throw error;
+  }
+}
+
+async function quarantineUnownedLocalData(): Promise<Record<string, unknown>> {
+  const currentData = await collectAllLocalAppData();
+  if (Object.keys(currentData).length === 0) {
+    return readUnassignedLegacyData();
+  }
+
+  const existingData = await readUnassignedLegacyData();
+  const quarantinedData = { ...existingData, ...currentData };
+  await AsyncStorage.setItem(
+    UNASSIGNED_LEGACY_DATA_KEY,
+    JSON.stringify(quarantinedData)
+  );
+  return quarantinedData;
+}
+
+async function claimUnassignedLegacyData(
+  userId: string,
+  confirmImport?: ConfirmLegacyDataImport
+): Promise<number> {
+  const unassignedData = await readUnassignedLegacyData();
+  const dataGroupCount = Object.keys(unassignedData).length;
+  if (dataGroupCount === 0 || !confirmImport) return 0;
+
+  const confirmed = await confirmImport(dataGroupCount);
+  if (!confirmed) return 0;
+
+  const existingSnapshot = await getLocalAccountSnapshot(userId);
+  await saveLocalAccountSnapshot(userId, {
+    ...existingSnapshot,
+    ...unassignedData,
+  });
+  await AsyncStorage.removeItem(UNASSIGNED_LEGACY_DATA_KEY);
+  return dataGroupCount;
+}
+
+export async function startGuestSession(
+  confirmLegacyDataImport?: ConfirmLegacyDataImport
+): Promise<AuthSessionState> {
   const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
 
   if (currentOwner && currentOwner !== 'guest') {
+    const previousUserData = await collectAllLocalAppData();
+    await saveLocalAccountSnapshot(currentOwner, previousUserData);
     await clearAllLocalUserFinanceData();
+  } else if (!currentOwner) {
+    const unassignedData = await quarantineUnownedLocalData();
+    if (Object.keys(unassignedData).length > 0) {
+      await clearAllLocalUserFinanceData();
+    }
   }
 
   const existing = await getAuthSession();
@@ -106,6 +213,14 @@ export async function startGuestSession(): Promise<AuthSessionState> {
     existing.mode === 'guest' && existing.userId
       ? existing.userId
       : `guest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  const importedCount = await claimUnassignedLegacyData(
+    guestId,
+    confirmLegacyDataImport
+  );
+  if (importedCount > 0) {
+    await hydrateLocalDataFromCloud(await getLocalAccountSnapshot(guestId));
+  }
 
   const nextState: AuthSessionState = {
     mode: 'guest',
@@ -170,9 +285,13 @@ export async function collectAllLocalAppData(): Promise<Record<string, unknown>>
 }
 
 export async function hydrateLocalDataFromCloud(
-  cloudData: Record<string, unknown> | null | undefined
+  cloudData: Record<string, unknown> | null | undefined,
+  userId?: string
 ): Promise<number> {
   if (!cloudData || typeof cloudData !== 'object') return 0;
+  if (userId && auth.currentUser?.uid !== userId) {
+    throw new Error('Cannot restore data for a different signed-in user.');
+  }
 
   const entries: [string, string][] = [];
 
@@ -196,17 +315,143 @@ export async function hydrateLocalDataFromCloud(
   return entries.length;
 }
 
-/**
- * Login / Account Switch-এর পর কল হবে:
- * - অন্য রেজিস্টার্ড ইউজারের লোকাল ডেটা থাকলে মুছে ফেলবে।
- * - Guest ডেটা থাকলে নতুন অ্যাকাউন্টের ক্লাউড ডেটা পরীক্ষা করবে।
- * - ক্লাউডে ডেটা থাকলে Guest ডেটা সরিয়ে ক্লাউড ডেটা Restore করবে।
- * - ক্লাউডে ডেটা না থাকলে Guest ডেটা ক্লাউডে Upload করবে।
- */
-export async function syncUserAccountOnLogin(params: {
+let accountInitializationQueue: Promise<void> = Promise.resolve();
+let accountInitializationGeneration = 0;
+
+function assertCurrentInitialization(userId: string, generation: number): void {
+  if (
+    accountInitializationGeneration !== generation ||
+    auth.currentUser?.uid !== userId
+  ) {
+    throw new Error('Signed-in user changed while initializing account data.');
+  }
+}
+
+async function initializeUserAccount(params: {
   userId: string;
   email?: string | null;
   displayName?: string | null;
+  confirmLegacyDataImport?: ConfirmLegacyDataImport;
+  fetchCloudDataFn?: (
+    userId: string
+  ) => Promise<Record<string, unknown> | null>;
+  saveCloudDataFn?: (
+    userId: string,
+    data: Record<string, unknown>
+  ) => Promise<void>;
+}, generation: number): Promise<{
+  hydratedCount: number;
+  syncedGuestCount: number;
+  clearedOtherUser: boolean;
+}> {
+  assertCurrentInitialization(params.userId, generation);
+  const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
+  assertCurrentInitialization(params.userId, generation);
+
+  let clearedOtherUser = false;
+
+  if (
+    currentOwner &&
+    currentOwner !== 'guest' &&
+    currentOwner !== params.userId
+  ) {
+    const previousUserData = await collectAllLocalAppData();
+    assertCurrentInitialization(params.userId, generation);
+    await saveLocalAccountSnapshot(currentOwner, previousUserData);
+    assertCurrentInitialization(params.userId, generation);
+  }
+
+  const [guestSnapshot, accountSnapshot] = await Promise.all([
+    currentOwner === 'guest' ? collectAllLocalAppData() : Promise.resolve({}),
+    !currentOwner
+      ? quarantineUnownedLocalData()
+      : Promise.resolve({}),
+  ]);
+  assertCurrentInitialization(params.userId, generation);
+
+  if (!currentOwner && Object.keys(accountSnapshot).length > 0) {
+    await clearAllLocalUserFinanceData();
+    assertCurrentInitialization(params.userId, generation);
+  }
+
+  await claimUnassignedLegacyData(
+    params.userId,
+    params.confirmLegacyDataImport
+  );
+  assertCurrentInitialization(params.userId, generation);
+  const userAccountSnapshot = await getLocalAccountSnapshot(params.userId);
+  assertCurrentInitialization(params.userId, generation);
+
+  const cloudData = params.fetchCloudDataFn
+    ? await params.fetchCloudDataFn(params.userId)
+    : null;
+  assertCurrentInitialization(params.userId, generation);
+  const pendingChanges = await getPendingLocalChangesForUser(params.userId);
+  assertCurrentInitialization(params.userId, generation);
+
+  const cloudHasData = Boolean(cloudData && Object.keys(cloudData).length > 0);
+  const activeUserSnapshot =
+    currentOwner === params.userId
+      ? await collectAllLocalAppData()
+      : {};
+  assertCurrentInitialization(params.userId, generation);
+
+  const localFallback = {
+    ...userAccountSnapshot,
+    ...activeUserSnapshot,
+    ...(!cloudHasData && currentOwner === 'guest' ? guestSnapshot : {}),
+  };
+
+  const restoredData = {
+    ...localFallback,
+    ...(cloudData ?? {}),
+    ...pendingChanges,
+  };
+
+  if (currentOwner && currentOwner !== params.userId) {
+    await clearAllLocalUserFinanceData();
+    assertCurrentInitialization(params.userId, generation);
+    clearedOtherUser = true;
+  }
+
+  const shouldUploadSnapshot =
+    Object.keys(restoredData).length > 0 &&
+    (!cloudHasData ||
+      Object.keys(localFallback).length > 0 ||
+      Object.keys(pendingChanges).length > 0);
+  if (shouldUploadSnapshot && params.saveCloudDataFn) {
+    assertCurrentInitialization(params.userId, generation);
+    await params.saveCloudDataFn(params.userId, restoredData);
+    assertCurrentInitialization(params.userId, generation);
+  }
+
+  const hydratedCount = await hydrateLocalDataFromCloud(
+    restoredData,
+    params.userId
+  );
+  assertCurrentInitialization(params.userId, generation);
+  const syncedGuestCount =
+    currentOwner === 'guest' ? Object.keys(guestSnapshot).length : 0;
+  await setRegisteredSession({
+    userId: params.userId,
+    email: params.email,
+    displayName: params.displayName,
+  });
+  assertCurrentInitialization(params.userId, generation);
+  await startFirebaseSync(params.userId);
+
+  return {
+    hydratedCount,
+    syncedGuestCount,
+    clearedOtherUser,
+  };
+}
+
+export function syncUserAccountOnLogin(params: {
+  userId: string;
+  email?: string | null;
+  displayName?: string | null;
+  confirmLegacyDataImport?: ConfirmLegacyDataImport;
   fetchCloudDataFn?: (
     userId: string
   ) => Promise<Record<string, unknown> | null>;
@@ -219,58 +464,13 @@ export async function syncUserAccountOnLogin(params: {
   syncedGuestCount: number;
   clearedOtherUser: boolean;
 }> {
-  const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
-
-  let clearedOtherUser = false;
-
-  // অন্য রেজিস্টার্ড ইউজারের ডেটা থাকলে সরিয়ে ফেলবে
-  if (
-    currentOwner &&
-    currentOwner !== 'guest' &&
-    currentOwner !== params.userId
-  ) {
-    await clearAllLocalUserFinanceData();
-    clearedOtherUser = true;
-  }
-
-  // Guest ডেটা আগে সংগ্রহ করে রাখবে
-  const guestSnapshot =
-    currentOwner === 'guest'
-      ? await collectAllLocalAppData()
-      : {};
-
-  const guestKeysCount = Object.keys(guestSnapshot).length;
-
-  let hydratedCount = 0;
-  let syncedGuestCount = 0;
-
-  // প্রথমে নতুন অ্যাকাউন্টের Cloud Data পরীক্ষা করবে
-  const cloudData = params.fetchCloudDataFn
-    ? await params.fetchCloudDataFn(params.userId)
-    : null;
-
-  if (cloudData && Object.keys(cloudData).length > 0) {
-    // Cloud Data থাকলে পুরোনো Local Data সরিয়ে Restore করবে
-    await clearAllLocalUserFinanceData();
-
-    hydratedCount = await hydrateLocalDataFromCloud(cloudData);
-  } else if (guestKeysCount > 0 && params.saveCloudDataFn) {
-    // Cloud Data না থাকলে Guest Data Upload করবে
-    await params.saveCloudDataFn(params.userId, guestSnapshot);
-
-    syncedGuestCount = guestKeysCount;
-  }
-
-  // সব কাজ সফল হওয়ার পর Registered Session সেট করবে
-  await setRegisteredSession({
-    userId: params.userId,
-    email: params.email,
-    displayName: params.displayName,
-  });
-
-  return {
-    hydratedCount,
-    syncedGuestCount,
-    clearedOtherUser,
-  };
+  const generation = ++accountInitializationGeneration;
+  const initialization = accountInitializationQueue.then(() =>
+    initializeUserAccount(params, generation)
+  );
+  accountInitializationQueue = initialization.then(
+    () => undefined,
+    () => undefined
+  );
+  return initialization;
 }

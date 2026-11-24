@@ -30,6 +30,29 @@ export default function RegisterScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const confirmLegacyDataImport = (dataGroupCount: number) => {
+    const message =
+      `${dataGroupCount} unassigned local data group(s) were found on this device. ` +
+      'Their previous account cannot be determined. Import them into this account? ' +
+      'Existing cloud values will be kept when a data group conflicts.';
+
+    if (Platform.OS === 'web') {
+      return Promise.resolve(window.confirm(message));
+    }
+
+    return new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'Unassigned local data',
+        message,
+        [
+          { text: 'Keep separate', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Import to this account', onPress: () => resolve(true) },
+        ],
+        { cancelable: false }
+      );
+    });
+  };
+
   const handleRegister = async () => {
     if (!name.trim() || !email.trim() || !password || !confirmPassword) {
       Alert.alert('Required', 'Please complete all fields.');
@@ -69,6 +92,7 @@ export default function RegisterScreen() {
         userId: credential.user.uid,
         email: credential.user.email,
         displayName: name.trim(),
+        confirmLegacyDataImport,
 
         // Fetch existing cloud data
         fetchCloudDataFn: async (uid) => {
@@ -109,7 +133,7 @@ export default function RegisterScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.card}>
-          <Text style={styles.logo}>MyBudgetApp</Text>
+          <Text style={styles.logo}>My Budget</Text>
           <Text style={styles.heading}>Create Account</Text>
           <Text style={styles.subtitle}>
             Start managing your finances today. Your local data will stay synced.

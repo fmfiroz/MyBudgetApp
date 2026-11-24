@@ -293,7 +293,7 @@ export default function HomeScreen() {
               showsVerticalScrollIndicator={false}
             >
               <View style={styles.drawerTopHeader}>
-                <Text style={styles.drawerBrandLabel}>MyBudgetApp</Text>
+                <Text style={styles.drawerBrandLabel}>My Budget</Text>
                 <TouchableOpacity
                   style={styles.drawerCloseBtn}
                   onPress={() => closeDrawer()}
@@ -365,8 +365,8 @@ export default function HomeScreen() {
                   </Text>
                   <Text style={styles.aboutParagraph}>
                     {lang === 'bn'
-                      ? 'MyBudgetApp হলো ব্যক্তিগত আয়, মাসিক বাজেট, সঞ্চয়/পলিসি ও দোকানের ধারের হিসাব সহজে গুছিয়ে রাখার একটি স্মার্ট ফিন্যান্স অ্যাপ।'
-                      : 'MyBudgetApp is a personal finance companion designed to track monthly income, budgets, savings plans, and shop debts cleanly.'}
+                      ? 'My Budget হলো ব্যক্তিগত আয়, মাসিক বাজেট, সঞ্চয়/পলিসি ও দোকানের ধারের হিসাব সহজে গুছিয়ে রাখার একটি স্মার্ট ফিন্যান্স অ্যাপ।'
+                      : 'My Budget is a personal finance companion designed to track monthly income, budgets, savings plans, and shop debts cleanly.'}
                   </Text>
                 </View>
               </View>
@@ -381,8 +381,8 @@ export default function HomeScreen() {
                     <Text style={styles.devName}>Firoz Mahmud</Text>
                     <Text style={styles.devSub}>
                       {lang === 'bn'
-                        ? 'MyBudgetApp Creator & Developer'
-                        : 'Creator & Developer • MyBudgetApp'}
+                        ? 'My Budget Creator & Developer'
+                        : 'Creator & Developer • My Budget'}
                     </Text>
                   </View>
                 </View>

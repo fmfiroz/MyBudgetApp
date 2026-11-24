@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { saveLocalData } from '../utils/firebaseSync';
 
 type EntryKind = 'fuel' | 'maintenance';
 type VehicleCategory = 'Bike' | 'Car' | 'Scooty' | 'Pickup / Van' | 'Other';
@@ -174,6 +175,8 @@ const formatVehicleType = (v: VehicleProfile): string => {
 
 export default function VehicleExpenseScreen() {
   const router = useRouter();
+  const { manage: manageParam } = useLocalSearchParams<{ manage?: string }>();
+  const canManageVehicleData = manageParam === '1';
 
   const [store, setStore] = useState<VehicleStoreData>({
     vehicles: [],
@@ -208,6 +211,7 @@ export default function VehicleExpenseScreen() {
 
   // Add Vehicle Modal
   const [vehicleModalVisible, setVehicleModalVisible] = useState(false);
+  const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [vehNameInput, setVehNameInput] = useState<string>('');
   const [vehCategoryInput, setVehCategoryInput] = useState<VehicleCategory>('Bike');
   const [vehCustomCategoryInput, setVehCustomCategoryInput] = useState<string>('');
@@ -309,7 +313,7 @@ export default function VehicleExpenseScreen() {
   const saveStore = useCallback(async (next: VehicleStoreData) => {
     setStore(next);
     try {
-      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      await saveLocalData(STORAGE_KEY, next);
     } catch (e) {
       console.log('Failed to save vehicle log data:', e);
     }
@@ -318,7 +322,7 @@ export default function VehicleExpenseScreen() {
   const persistSavedItemMemory = useCallback(async (items: SavedItemTemplate[]) => {
     setSavedItemMemory(items);
     try {
-      await AsyncStorage.setItem(SAVED_ITEMS_KEY, JSON.stringify(items));
+      await saveLocalData(SAVED_ITEMS_KEY, items);
     } catch (e) {
       console.log('Failed to save item memory:', e);
     }
@@ -393,7 +397,25 @@ export default function VehicleExpenseScreen() {
     });
   };
 
-  const handleAddVehicle = async () => {
+  const openAddVehicleModal = () => {
+    setEditingVehicleId(null);
+    setVehNameInput('');
+    setVehCategoryInput('Bike');
+    setVehCustomCategoryInput('');
+    setVehRegNoInput('');
+    setVehicleModalVisible(true);
+  };
+
+  const openEditVehicleModal = (vehicle: VehicleProfile) => {
+    setEditingVehicleId(vehicle.id);
+    setVehNameInput(vehicle.name);
+    setVehCategoryInput(vehicle.category);
+    setVehCustomCategoryInput(vehicle.customCategory || '');
+    setVehRegNoInput(vehicle.regNo || '');
+    setVehicleModalVisible(true);
+  };
+
+  const handleSaveVehicle = async () => {
     const cleanName = vehNameInput.trim();
     if (!cleanName) {
       Alert.alert('তথ্য অসম্পূর্ণ', 'অনুগ্রহ করে গাড়ির নাম লিখুন (যেমন: Pulsar 150, Corolla)।');
@@ -404,8 +426,10 @@ export default function VehicleExpenseScreen() {
       return;
     }
 
-    const newVeh: VehicleProfile = {
-      id: `veh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    const updatedVehicle: VehicleProfile = {
+      id:
+        editingVehicleId ||
+        `veh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       name: cleanName,
       category: vehCategoryInput,
       customCategory:
@@ -415,8 +439,12 @@ export default function VehicleExpenseScreen() {
 
     await saveStore({
       ...store,
-      vehicles: [...store.vehicles, newVeh],
-      selectedVehicleId: newVeh.id,
+      vehicles: editingVehicleId
+        ? store.vehicles.map((vehicle) =>
+            vehicle.id === editingVehicleId ? updatedVehicle : vehicle
+          )
+        : [...store.vehicles, updatedVehicle],
+      selectedVehicleId: editingVehicleId ? store.selectedVehicleId : updatedVehicle.id,
     });
 
     setVehNameInput('');
@@ -424,6 +452,37 @@ export default function VehicleExpenseScreen() {
     setVehCustomCategoryInput('');
     setVehRegNoInput('');
     setVehicleModalVisible(false);
+  };
+
+  const handleDeleteActiveVehicle = () => {
+    if (!activeVehicle) return;
+    const hasEntries = store.entries.some((entry) => entry.vehicleId === activeVehicle.id);
+    const hasPendingReading = Boolean(store.pendingFuelByVehicle[activeVehicle.id]);
+    if (hasEntries || hasPendingReading) {
+      Alert.alert(
+        'Vehicle has records',
+        'Delete this vehicle’s fuel and maintenance records and pending reading first.'
+      );
+      return;
+    }
+
+    Alert.alert('Delete Vehicle', `Delete ${activeVehicle.name}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          const vehicles = store.vehicles.filter(
+            (vehicle) => vehicle.id !== activeVehicle.id
+          );
+          void saveStore({
+            ...store,
+            vehicles,
+            selectedVehicleId: vehicles[0]?.id ?? null,
+          });
+        },
+      },
+    ]);
   };
 
   const openFinishReadingModal = () => {
@@ -1027,7 +1086,9 @@ export default function VehicleExpenseScreen() {
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
         </TouchableOpacity>
         <View style={styles.headerTitleBox}>
-          <Text style={styles.headerTitle}>Vehicle Log & Expense Sheet</Text>
+          <Text style={styles.headerTitle}>
+            {canManageVehicleData ? 'Manage Vehicle Records' : 'Vehicle Log & Expense Sheet'}
+          </Text>
           <Text style={styles.headerSub}>
             {activeVehicle
               ? `${activeVehicle.name} (${formatVehicleType(activeVehicle)})`
@@ -1042,15 +1103,19 @@ export default function VehicleExpenseScreen() {
             <Ionicons name="car-sport-outline" size={44} color="#1D4ED8" />
             <Text style={styles.emptyInitialTitle}>কোনো Vehicle যুক্ত করা নেই</Text>
             <Text style={styles.emptyInitialSub}>
-              হিসাব শুরু করতে প্রথমে একটি Vehicle (Bike, Car বা Other) যোগ করুন।
+              {canManageVehicleData
+                ? 'No vehicle is available to manage. Add a vehicle from the Vehicle page.'
+                : 'হিসাব শুরু করতে প্রথমে একটি Vehicle (Bike, Car বা Other) যোগ করুন।'}
             </Text>
-            <TouchableOpacity
-              style={styles.primaryAddVehicleBtn}
-              onPress={() => setVehicleModalVisible(true)}
-            >
-              <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
-              <Text style={styles.primaryAddVehicleText}>Add Vehicle</Text>
-            </TouchableOpacity>
+            {!canManageVehicleData && (
+              <TouchableOpacity
+                style={styles.primaryAddVehicleBtn}
+                onPress={openAddVehicleModal}
+              >
+                <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
+                <Text style={styles.primaryAddVehicleText}>Add Vehicle</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </View>
       ) : (
@@ -1091,13 +1156,34 @@ export default function VehicleExpenseScreen() {
               </View>
             </ScrollView>
 
-            <TouchableOpacity
-              style={styles.addVehicleBtn}
-              onPress={() => setVehicleModalVisible(true)}
-            >
-              <Ionicons name="add-circle-outline" size={15} color="#1D4ED8" />
-              <Text style={styles.addVehicleBtnText}>+ Vehicle</Text>
-            </TouchableOpacity>
+            {!canManageVehicleData && (
+              <TouchableOpacity
+                style={styles.addVehicleBtn}
+                onPress={openAddVehicleModal}
+              >
+                <Ionicons name="add-circle-outline" size={15} color="#1D4ED8" />
+                <Text style={styles.addVehicleBtnText}>+ Vehicle</Text>
+              </TouchableOpacity>
+            )}
+
+            {canManageVehicleData && (
+              <>
+                <TouchableOpacity
+                  style={styles.profileActionBtn}
+                  onPress={() => openEditVehicleModal(activeVehicle)}
+                  accessibilityLabel="Edit selected vehicle"
+                >
+                  <Ionicons name="create-outline" size={16} color="#1D4ED8" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.profileActionBtn}
+                  onPress={handleDeleteActiveVehicle}
+                  accessibilityLabel="Delete selected vehicle"
+                >
+                  <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                </TouchableOpacity>
+              </>
+            )}
           </View>
 
           {activePendingFuel && (
@@ -1107,16 +1193,20 @@ export default function VehicleExpenseScreen() {
                   ⏳ Fuel Finish Reading: {activePendingFuel.reading} km ({activePendingFuel.date})
                 </Text>
                 <Text style={styles.pendingSub}>
-                  "+ Fuel (Load)" চাপলে Date ও Reading দুটোই অটো বসে যাবে।
+                  {canManageVehicleData
+                    ? '"+ Fuel (Load)" চাপলে Date ও Reading দুটোই অটো বসে যাবে।'
+                    : 'This pending reading can be used from Vehicle Management in Settings.'}
                 </Text>
               </View>
-              <TouchableOpacity
-                onPress={requestCancelPendingFinish}
-                style={styles.pendingClearBtn}
-              >
-                <Ionicons name="lock-closed-outline" size={12} color="#92400E" />
-                <Text style={styles.pendingClearText}>বাতিল</Text>
-              </TouchableOpacity>
+              {canManageVehicleData && (
+                <TouchableOpacity
+                  onPress={requestCancelPendingFinish}
+                  style={styles.pendingClearBtn}
+                >
+                  <Ionicons name="lock-closed-outline" size={12} color="#92400E" />
+                  <Text style={styles.pendingClearText}>বাতিল</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -1156,17 +1246,19 @@ export default function VehicleExpenseScreen() {
             )}
           </View>
 
-          <View style={styles.quickBar}>
-            <TouchableOpacity style={styles.finishChip} onPress={openFinishReadingModal}>
-              <Text style={styles.finishChipText}>⏱ Fuel Finish Reading</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.quickChip} onPress={() => openAddModal('fuel')}>
-              <Text style={styles.quickChipText}>+ Fuel (Load)</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.quickChip} onPress={() => openAddModal('maintenance')}>
-              <Text style={styles.quickChipText}>+ Servicing</Text>
-            </TouchableOpacity>
-          </View>
+          {canManageVehicleData && (
+            <View style={styles.quickBar}>
+              <TouchableOpacity style={styles.finishChip} onPress={openFinishReadingModal}>
+                <Text style={styles.finishChipText}>⏱ Fuel Finish Reading</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.quickChip} onPress={() => openAddModal('fuel')}>
+                <Text style={styles.quickChipText}>+ Fuel (Load)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.quickChip} onPress={() => openAddModal('maintenance')}>
+                <Text style={styles.quickChipText}>+ Servicing</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
           <ScrollView style={styles.verticalScroll} keyboardShouldPersistTaps="handled">
             <ScrollView horizontal showsHorizontalScrollIndicator={true}>
@@ -1218,9 +1310,11 @@ export default function VehicleExpenseScreen() {
                   <View style={[styles.cell, styles.colNum]}>
                     <Text style={styles.avgText}>{fmtFixed(averageSummary.avgCostPerKm, 2)}</Text>
                   </View>
-                  <View style={[styles.cell, styles.colAction]}>
-                    <Text style={styles.avgText}>-</Text>
-                  </View>
+                  {canManageVehicleData && (
+                    <View style={[styles.cell, styles.colAction]}>
+                      <Text style={styles.avgText}>-</Text>
+                    </View>
+                  )}
                 </View>
 
                 <View style={[styles.tableRow, styles.headerRow]}>
@@ -1263,15 +1357,19 @@ export default function VehicleExpenseScreen() {
                   <View style={[styles.cell, styles.colNum]}>
                     <Text style={styles.headerText}>Cost/Km</Text>
                   </View>
-                  <View style={[styles.cell, styles.colAction]}>
-                    <Text style={styles.headerText}>Action</Text>
-                  </View>
+                  {canManageVehicleData && (
+                    <View style={[styles.cell, styles.colAction]}>
+                      <Text style={styles.headerText}>Action</Text>
+                    </View>
+                  )}
                 </View>
 
                 {displayRows.length === 0 ? (
                   <View style={styles.emptyRow}>
                     <Text style={styles.emptyText}>
-                      কোনো এন্ট্রি নেই। Fuel Finish Reading, + Fuel (Load) বা + Servicing চাপুন।
+                      {canManageVehicleData
+                        ? 'কোনো এন্ট্রি নেই। Fuel Finish Reading, + Fuel (Load) বা + Servicing চাপুন।'
+                        : 'No vehicle records are available.'}
                     </Text>
                   </View>
                 ) : (
@@ -1367,14 +1465,16 @@ export default function VehicleExpenseScreen() {
                         <View style={[styles.cell, styles.colNum]}>
                           <Text style={styles.cellTextNum}>{fmtFixed(row.costPerKm, 2)}</Text>
                         </View>
-                        <View style={[styles.cell, styles.colAction, styles.actionCell]}>
-                          <TouchableOpacity onPress={() => openEditModal(entry)}>
-                            <Ionicons name="create-outline" size={16} color="#2563EB" />
-                          </TouchableOpacity>
-                          <TouchableOpacity onPress={() => requestDeleteEntry(entry)}>
-                            <Ionicons name="trash-outline" size={16} color="#DC2626" />
-                          </TouchableOpacity>
-                        </View>
+                        {canManageVehicleData && (
+                          <View style={[styles.cell, styles.colAction, styles.actionCell]}>
+                            <TouchableOpacity onPress={() => openEditModal(entry)}>
+                              <Ionicons name="create-outline" size={16} color="#2563EB" />
+                            </TouchableOpacity>
+                            <TouchableOpacity onPress={() => requestDeleteEntry(entry)}>
+                              <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                            </TouchableOpacity>
+                          </View>
+                        )}
                       </View>
                     );
                   })
@@ -1592,7 +1692,9 @@ export default function VehicleExpenseScreen() {
         >
           <View style={styles.modalCard}>
             <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalTitle}>নতুন Vehicle যোগ করুন</Text>
+              <Text style={styles.modalTitle}>
+                {editingVehicleId ? 'Edit Vehicle' : 'নতুন Vehicle যোগ করুন'}
+              </Text>
 
               <Text style={styles.label}>Vehicle Name *</Text>
               <TextInput
@@ -1649,9 +1751,11 @@ export default function VehicleExpenseScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                  onPress={handleAddVehicle}
+                  onPress={handleSaveVehicle}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Vehicle যোগ করুন</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                    {editingVehicleId ? 'Save Vehicle' : 'Vehicle যোগ করুন'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -2175,6 +2279,16 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '700',
     color: '#1D4ED8',
+  },
+  profileActionBtn: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   pendingBanner: {
     flexDirection: 'row',

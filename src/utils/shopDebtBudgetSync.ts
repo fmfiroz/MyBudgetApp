@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { saveLocalData } from './firebaseSync';
 
 export type MeasurementUnit =
   | 'kg'
@@ -238,7 +239,7 @@ export async function recordUnitUsage(unit: MeasurementUnit): Promise<Measuremen
     const raw = await AsyncStorage.getItem(UNIT_USAGE_KEY);
     const counts: Partial<Record<MeasurementUnit, number>> = raw ? JSON.parse(raw) : {};
     counts[cleanUnit] = (counts[cleanUnit] || 0) + 1;
-    await AsyncStorage.setItem(UNIT_USAGE_KEY, JSON.stringify(counts));
+    await saveLocalData(UNIT_USAGE_KEY, counts);
   } catch (e) {
     console.log('Failed to record unit usage:', e);
   }
@@ -305,7 +306,7 @@ export async function upsertProductCatalogItem(
   }
 
   try {
-    await AsyncStorage.setItem(PRODUCT_CATALOG_KEY, JSON.stringify(updated));
+    await saveLocalData(PRODUCT_CATALOG_KEY, updated);
   } catch (e) {
     console.log('Failed to save product catalog:', e);
   }
@@ -338,7 +339,7 @@ export async function syncDebtToNextMonthBudget(
       updatedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(linkKey, JSON.stringify(updated));
+    await saveLocalData(linkKey, updated);
   } catch (error) {
     console.log('Failed to sync shop debt to next month budget:', error);
   }
@@ -368,7 +369,7 @@ export async function saveShopDebtPaymentFromBudget(
       updatedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(linkKey, JSON.stringify(updated));
+    await saveLocalData(linkKey, updated);
   } catch (error) {
     console.log('Failed to save shop debt payment from budget:', error);
   }

@@ -15,6 +15,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { saveLocalData } from '../utils/firebaseSync';
 
 type WelfareTab = 'income' | 'expense' | 'loans';
 
@@ -257,7 +258,7 @@ export default function WelfareScreen() {
   const persistStore = useCallback(async (next: WelfareStoreData) => {
     setStore(next);
     try {
-      await AsyncStorage.setItem(WELFARE_STORAGE_KEY, JSON.stringify(next));
+      await saveLocalData(WELFARE_STORAGE_KEY, next);
     } catch (e) {
       console.log('Failed to save welfare data:', e);
     }

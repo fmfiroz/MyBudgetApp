@@ -18,7 +18,6 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth } from '../firebase';
 import {
   AuthSessionState,
-  clearAllLocalUserFinanceData,
   getAuthSession,
 } from '../utils/guestAuthSync';
 
@@ -111,15 +110,6 @@ export const ALL_DASHBOARD_MODULES: DashboardModuleItem[] = [
     color: '#ea580c',
     defaultEnabled: false,
   },
-  {
-    id: 'settings',
-    titleEn: 'Settings',
-    titleBn: 'সেটিংস',
-    icon: '⚙️',
-    route: '/settings',
-    color: '#64748b',
-    defaultEnabled: false,
-  },
 ];
 
 export const DEFAULT_ENABLED_MODULE_IDS: string[] = ALL_DASHBOARD_MODULES.filter(
@@ -190,6 +180,11 @@ export default function HomeScreen() {
     return ALL_DASHBOARD_MODULES.filter((item) => idSet.has(item.id));
   }, [enabledModuleIds]);
 
+  const navigateFromDrawer = (route: string) => {
+    setDrawerVisible(false);
+    router.push(route as never);
+  };
+
   const isGuestMode = !authUser && session.mode === 'guest';
 
   const performLogout = async () => {
@@ -207,7 +202,6 @@ export default function HomeScreen() {
 
       await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
       if (auth.currentUser) {
-        await clearAllLocalUserFinanceData();
         await signOut(auth);
       }
       router.replace('/login');
@@ -282,20 +276,14 @@ export default function HomeScreen() {
 
         <View style={styles.brandTitleWrap}>
           <Text style={styles.brandTitle}>
-            {lang === 'bn' ? 'আমার বাজেট অ্যাপ' : 'MyBudgetApp'}
+            {lang === 'bn' ? 'আমার বাজেট' : 'My Budget'}
           </Text>
           <Text style={styles.brandSubtitle}>
             {isGuestMode ? 'Guest Mode • Local Sync' : 'Personal Finance Dashboard'}
           </Text>
         </View>
 
-        <TouchableOpacity
-          style={styles.quickSettingsBtn}
-          onPress={() => router.push('/settings' as never)}
-          accessibilityLabel="Settings"
-        >
-          <Ionicons name="settings-outline" size={20} color="#334155" />
-        </TouchableOpacity>
+        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
@@ -404,7 +392,7 @@ export default function HomeScreen() {
               showsVerticalScrollIndicator={false}
             >
               <View style={styles.drawerTopHeader}>
-                <Text style={styles.drawerBrandLabel}>MyBudgetApp</Text>
+                <Text style={styles.drawerBrandLabel}>My Budget</Text>
                 <TouchableOpacity
                   style={styles.drawerCloseBtn}
                   onPress={() => setDrawerVisible(false)}
@@ -443,6 +431,34 @@ export default function HomeScreen() {
                 </TouchableOpacity>
               )}
 
+              <View style={styles.navSectionBox}>
+                <Text style={styles.infoSectionTitle}>
+                  {lang === 'bn' ? 'নেভিগেশন' : 'Navigation'}
+                </Text>
+                {visibleMenuItems.map((item) => (
+                  <TouchableOpacity
+                    key={`drawer-${item.route}`}
+                    style={styles.drawerNavItem}
+                    onPress={() => navigateFromDrawer(item.route)}
+                  >
+                    <Text style={{ fontSize: 17 }}>{item.icon}</Text>
+                    <Text style={styles.drawerNavLabel}>
+                      {lang === 'bn' ? item.titleBn : item.titleEn}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+                <View style={styles.drawerDivider} />
+                <TouchableOpacity
+                  style={styles.drawerSettingsBtn}
+                  onPress={() => navigateFromDrawer('/settings')}
+                >
+                  <Ionicons name="settings-outline" size={20} color="#1D4ED8" />
+                  <Text style={styles.drawerSettingsText}>
+                    {lang === 'bn' ? 'সেটিংস (Settings)' : 'Settings'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
               <View style={styles.infoSectionBox}>
                 <Text style={styles.infoSectionTitle}>
                   {lang === 'bn' ? 'অ্যাপ তথ্য' : 'App Information'}
@@ -461,8 +477,8 @@ export default function HomeScreen() {
                   </Text>
                   <Text style={styles.aboutParagraph}>
                     {lang === 'bn'
-                      ? 'MyBudgetApp হলো ব্যক্তিগত আয়, মাসিক বাজেট, সঞ্চয়/পলিসি ও দোকানের ধারের হিসাব সহজে গুছিয়ে রাখার একটি স্মার্ট ফিন্যান্স অ্যাপ।'
-                      : 'MyBudgetApp is a personal finance companion designed to track monthly income, budgets, savings plans, and shop debts cleanly.'}
+                      ? 'My Budget হলো ব্যক্তিগত আয়, মাসিক বাজেট, সঞ্চয়/পলিসি ও দোকানের ধারের হিসাব সহজে গুছিয়ে রাখার একটি স্মার্ট ফিন্যান্স অ্যাপ।'
+                      : 'My Budget is a personal finance companion designed to track monthly income, budgets, savings plans, and shop debts cleanly.'}
                   </Text>
                 </View>
               </View>
@@ -477,8 +493,8 @@ export default function HomeScreen() {
                     <Text style={styles.devName}>Firoz Mahmud</Text>
                     <Text style={styles.devSub}>
                       {lang === 'bn'
-                        ? 'MyBudgetApp Creator & Developer'
-                        : 'Creator & Developer • MyBudgetApp'}
+                        ? 'My Budget Creator & Developer'
+                        : 'Creator & Developer • My Budget'}
                     </Text>
                   </View>
                 </View>
@@ -555,14 +571,6 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     color: '#64748B',
     marginTop: 1,
-  },
-  quickSettingsBtn: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    backgroundColor: '#F1F5F9',
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   scrollContainer: {
     padding: 16,
@@ -772,6 +780,48 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#475569',
     marginTop: 2,
+  },
+  navSectionBox: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 8,
+  },
+  drawerNavItem: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 8,
+    borderRadius: 9,
+    backgroundColor: '#FFFFFF',
+  },
+  drawerNavLabel: {
+    flex: 1,
+    color: '#334155',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  drawerDivider: {
+    height: 1,
+    backgroundColor: '#E2E8F0',
+    marginVertical: 3,
+  },
+  drawerSettingsBtn: {
+    minHeight: 42,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 8,
+    borderRadius: 9,
+    backgroundColor: '#EFF6FF',
+  },
+  drawerSettingsText: {
+    color: '#1D4ED8',
+    fontSize: 13,
+    fontWeight: '700',
   },
   drawerRegisterBtn: {
     flexDirection: 'row',

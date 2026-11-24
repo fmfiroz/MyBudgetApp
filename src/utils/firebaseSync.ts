@@ -1,10 +1,11 @@
-
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, AppStateStatus } from 'react-native';
 import {
   collection,
   doc,
   getDocs,
   getFirestore,
+  onSnapshot,
   setDoc,
 } from 'firebase/firestore';
 import { auth } from '../firebase';
@@ -20,76 +21,110 @@ const STATIC_SYNC_KEYS = [
   '@mybudget_savings_plans_v1',
   '@mybudget_welfare_fund_v1',
   '@vehicle_logsheet_table_v7',
+  '@vehicle_saved_items_v1',
+  '@mybudget_shop_product_catalog_v2',
+  '@mybudget_shop_unit_usage_v1',
 ];
 
 const SYNC_PREFIXES = [
   '@income_fy_',
   '@mybudget_budget_v3_',
+  '@mybudget_budget_shop_debt_link_',
   '@mybudget_savings_monthly_v1_',
   '@mybudget_savings_',
   '@mybudget_shop_debt_v2_',
+  '@mybudget_shop_debt_v3_',
   '@mybudget_welfare_',
   '@vehicle_',
 ];
+
+const PENDING_PREFIX = '@mybudget_sync_pending_v1_';
+const LOCAL_DATA_OWNER_KEY = '@mybudget_local_data_owner_v1';
+const retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const syncQueues = new Map<string, Promise<void>>();
+let unsubscribeSnapshot: (() => void) | null = null;
+let unsubscribeAppState: { remove: () => void } | null = null;
+let activeSyncUid: string | null = null;
 
 function toSafeDocId(key: string): string {
   return key.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-function isSyncKey(key: string): boolean {
+function pendingKey(uid: string, key: string): string {
+  return `${PENDING_PREFIX}${uid}_${encodeURIComponent(key)}`;
+}
+
+function isPendingKeyForUid(value: string, uid: string): boolean {
+  return value.startsWith(`${PENDING_PREFIX}${uid}_`);
+}
+
+export function isSyncKey(key: string): boolean {
   return (
     STATIC_SYNC_KEYS.includes(key) ||
     SYNC_PREFIXES.some((prefix) => key.startsWith(prefix))
   );
 }
 
-// Collect all supported local data
-export async function collectLocalSyncData(): Promise<
-  Record<string, unknown>
-> {
+function parseStoredValue(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+}
+
+export async function collectLocalSyncData(): Promise<Record<string, unknown>> {
   const allKeys = await AsyncStorage.getAllKeys();
   const keys = allKeys.filter(isSyncKey);
-
-  if (keys.length === 0) return {};
-
-  const pairs = await AsyncStorage.multiGet(keys);
+  const pairs = keys.length ? await AsyncStorage.multiGet(keys) : [];
   const data: Record<string, unknown> = {};
 
   for (const [key, raw] of pairs) {
-    if (raw === null) continue;
-
-    try {
-      data[key] = JSON.parse(raw);
-    } catch {
-      data[key] = raw;
-    }
+    if (raw !== null) data[key] = parseStoredValue(raw);
   }
 
   return data;
 }
 
-// Fetch Firebase data without modifying local storage
+export async function getPendingLocalChangesForUser(
+  uid: string
+): Promise<Record<string, unknown>> {
+  const allKeys = await AsyncStorage.getAllKeys();
+  const keys = allKeys.filter((key) => isPendingKeyForUid(key, uid));
+  const pairs = keys.length ? await AsyncStorage.multiGet(keys) : [];
+  const changes: Record<string, unknown> = {};
+
+  for (const [, raw] of pairs) {
+    if (!raw) continue;
+    try {
+      const entry = JSON.parse(raw) as { key?: string; value?: unknown };
+      if (entry.key && isSyncKey(entry.key) && entry.value !== undefined) {
+        changes[entry.key] = entry.value;
+      }
+    } catch (error) {
+      console.error('Unable to read a pending Firebase change:', error);
+    }
+  }
+
+  return changes;
+}
+
 export async function fetchAllFirebaseData(
   targetUid: string
 ): Promise<Record<string, unknown>> {
-  const snap = await getDocs(
-    collection(db, 'users', targetUid, 'mybudget_backup')
-  );
+  if (auth.currentUser?.uid !== targetUid) {
+    throw new Error('Cannot read cloud data for a different signed-in user.');
+  }
 
+  const snap = await getDocs(collection(db, 'users', targetUid, 'mybudget_backup'));
+  if (auth.currentUser?.uid !== targetUid) {
+    throw new Error('Signed-in user changed while loading cloud data.');
+  }
   const data: Record<string, unknown> = {};
 
   for (const item of snap.docs) {
-    const payload = item.data() as {
-      key?: string;
-      value?: unknown;
-    };
-
-    if (
-      payload.key &&
-      payload.value !== undefined &&
-      payload.value !== null &&
-      isSyncKey(payload.key)
-    ) {
+    const payload = item.data() as { key?: string; value?: unknown };
+    if (payload.key && payload.value !== undefined && isSyncKey(payload.key)) {
       data[payload.key] = payload.value;
     }
   }
@@ -97,108 +132,227 @@ export async function fetchAllFirebaseData(
   return data;
 }
 
-// Save Guest or local snapshot to a Firebase account
 export async function saveSnapshotToFirebase(
   targetUid: string,
   data: Record<string, unknown>
 ): Promise<number> {
-  let count = 0;
+  if (auth.currentUser?.uid !== targetUid) {
+    throw new Error('Cannot write cloud data for a different signed-in user.');
+  }
 
+  let count = 0;
   for (const [key, value] of Object.entries(data)) {
-    if (!isSyncKey(key) || value === undefined || value === null) {
-      continue;
+    if (auth.currentUser?.uid !== targetUid) {
+      throw new Error('Signed-in user changed while saving cloud data.');
     }
+    if (!isSyncKey(key) || value === undefined || value === null) continue;
 
     await setDoc(
-      doc(
-        db,
-        'users',
-        targetUid,
-        'mybudget_backup',
-        toSafeDocId(key)
-      ),
-      {
-        key,
-        value,
-        updatedAt: new Date().toISOString(),
-      },
+      doc(db, 'users', targetUid, 'mybudget_backup', toSafeDocId(key)),
+      { key, value, updatedAt: new Date().toISOString() },
       { merge: true }
     );
-
     count++;
   }
 
   return count;
 }
 
-// Push all supported local data to Firebase
+async function queuePendingChange(
+  uid: string,
+  key: string,
+  value: unknown
+): Promise<void> {
+  await AsyncStorage.setItem(
+    pendingKey(uid, key),
+    JSON.stringify({ key, value })
+  );
+}
+
+export async function saveLocalData(
+  storageKey: string,
+  value: unknown
+): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  const serialized = typeof value === 'string' ? value : JSON.stringify(value);
+  const shouldSync = Boolean(uid && isSyncKey(storageKey));
+  if (shouldSync && uid) {
+    await queuePendingChange(uid, storageKey, parseStoredValue(serialized));
+    if (auth.currentUser?.uid !== uid) return;
+  }
+
+  await AsyncStorage.setItem(storageKey, serialized);
+  if (!shouldSync || !uid || auth.currentUser?.uid !== uid) return;
+
+  const owner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
+  if (owner !== uid || auth.currentUser?.uid !== uid) return;
+  void syncLocalToFirebaseSafely(uid);
+}
+
 export async function pushAllLocalToFirebase(
   targetUid?: string
 ): Promise<number> {
   const uid = targetUid || auth.currentUser?.uid;
-  if (!uid) return 0;
-
+  if (!uid || auth.currentUser?.uid !== uid) return 0;
   const data = await collectLocalSyncData();
-
   return saveSnapshotToFirebase(uid, data);
 }
 
-// Restore Firebase data to local storage
 export async function restoreAllFromFirebase(
   targetUid?: string
 ): Promise<number> {
   const uid = targetUid || auth.currentUser?.uid;
-  if (!uid) return 0;
+  if (!uid || auth.currentUser?.uid !== uid) return 0;
 
   const cloudData = await fetchAllFirebaseData(uid);
+  if (auth.currentUser?.uid !== uid) return 0;
+  const pending = await getPendingLocalChangesForUser(uid);
+  if (auth.currentUser?.uid !== uid) return 0;
   const entries: [string, string][] = [];
 
   for (const [key, value] of Object.entries(cloudData)) {
-    if (!isSyncKey(key) || value === undefined || value === null) {
-      continue;
-    }
-
-    entries.push([
-      key,
-      typeof value === 'string' ? value : JSON.stringify(value),
-    ]);
+    if (pending[key] !== undefined || value === null) continue;
+    entries.push([key, typeof value === 'string' ? value : JSON.stringify(value)]);
   }
 
-  if (entries.length > 0) {
-    await AsyncStorage.multiSet(entries);
-  }
-
+  if (entries.length) await AsyncStorage.multiSet(entries);
   return entries.length;
 }
 
-let isSyncingToCloud = false;
-let pendingSyncAgain = false;
+async function flushPendingChanges(uid: string): Promise<void> {
+  if (auth.currentUser?.uid !== uid) return;
 
-/**
- * Call after saving local data.
- * Runs background Firebase sync serially.
- */
+  const allKeys = await AsyncStorage.getAllKeys();
+  const pendingKeys = allKeys.filter((key) => isPendingKeyForUid(key, uid));
+  const pairs = pendingKeys.length ? await AsyncStorage.multiGet(pendingKeys) : [];
+
+  for (const [queueKey, raw] of pairs) {
+    if (!raw || auth.currentUser?.uid !== uid) return;
+
+    const entry = JSON.parse(raw) as { key: string; value: unknown };
+    if (!isSyncKey(entry.key)) {
+      await AsyncStorage.removeItem(queueKey);
+      continue;
+    }
+
+    await setDoc(
+      doc(db, 'users', uid, 'mybudget_backup', toSafeDocId(entry.key)),
+      { key: entry.key, value: entry.value, updatedAt: new Date().toISOString() },
+      { merge: true }
+    );
+
+    if ((await AsyncStorage.getItem(queueKey)) === raw) {
+      await AsyncStorage.removeItem(queueKey);
+    }
+  }
+}
+
 export async function syncLocalToFirebaseSafely(
   targetUid?: string
 ): Promise<void> {
   const uid = targetUid || auth.currentUser?.uid;
-  if (!uid) return;
+  if (!uid || auth.currentUser?.uid !== uid) return;
 
-  if (isSyncingToCloud) {
-    pendingSyncAgain = true;
+  const previousSync = syncQueues.get(uid) || Promise.resolve();
+  const currentSync = previousSync
+    .catch(() => undefined)
+    .then(() => flushPendingChanges(uid));
+  syncQueues.set(uid, currentSync);
+
+  try {
+    await currentSync;
+  } catch (error) {
+    console.warn('Firebase sync is waiting for a network connection:', error);
+    if (auth.currentUser?.uid === uid && !retryTimers.has(uid)) {
+      retryTimers.set(
+        uid,
+        setTimeout(() => {
+          retryTimers.delete(uid);
+          void syncLocalToFirebaseSafely(uid);
+        }, 15000)
+      );
+    }
+  } finally {
+    if (syncQueues.get(uid) === currentSync) {
+      syncQueues.delete(uid);
+    }
+  }
+}
+
+export function stopFirebaseSync(): void {
+  unsubscribeSnapshot?.();
+  unsubscribeSnapshot = null;
+  unsubscribeAppState?.remove();
+  unsubscribeAppState = null;
+  if (activeSyncUid) {
+    const timer = retryTimers.get(activeSyncUid);
+    if (timer) clearTimeout(timer);
+    retryTimers.delete(activeSyncUid);
+  }
+  activeSyncUid = null;
+}
+
+export async function startFirebaseSync(uid: string): Promise<void> {
+  if (auth.currentUser?.uid !== uid) return;
+  if (activeSyncUid === uid) {
+    void syncLocalToFirebaseSafely(uid);
     return;
   }
 
-  isSyncingToCloud = true;
+  stopFirebaseSync();
+  activeSyncUid = uid;
 
-  try {
-    do {
-      pendingSyncAgain = false;
-      await pushAllLocalToFirebase(uid);
-    } while (pendingSyncAgain);
-  } catch (e) {
-    console.log('Background cloud sync skipped/failed:', e);
-  } finally {
-    isSyncingToCloud = false;
-  }
+  unsubscribeSnapshot = onSnapshot(
+    collection(db, 'users', uid, 'mybudget_backup'),
+    { includeMetadataChanges: true },
+    async (snapshot) => {
+      if (
+        snapshot.metadata.fromCache ||
+        auth.currentUser?.uid !== uid ||
+        (await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY)) !== uid
+      ) {
+        return;
+      }
+
+      const pending = await getPendingLocalChangesForUser(uid);
+      const entries: [string, string][] = [];
+      for (const document of snapshot.docs) {
+        if (document.metadata.hasPendingWrites) continue;
+        const payload = document.data() as { key?: string; value?: unknown };
+        if (
+          !payload.key ||
+          !isSyncKey(payload.key) ||
+          payload.value === undefined ||
+          pending[payload.key] !== undefined
+        ) {
+          continue;
+        }
+        entries.push([
+          payload.key,
+          typeof payload.value === 'string'
+            ? payload.value
+            : JSON.stringify(payload.value),
+        ]);
+      }
+      if (
+        auth.currentUser?.uid !== uid ||
+        (await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY)) !== uid
+      ) {
+        return;
+      }
+      if (entries.length) await AsyncStorage.multiSet(entries);
+      void syncLocalToFirebaseSafely(uid);
+    },
+    (error) => {
+      console.error('Firebase account listener failed:', error);
+    }
+  );
+
+  const onAppStateChange = (state: AppStateStatus) => {
+    if (state === 'active' && auth.currentUser?.uid === uid) {
+      void syncLocalToFirebaseSafely(uid);
+    }
+  };
+  unsubscribeAppState = AppState.addEventListener('change', onAppStateChange);
+  if (AppState.currentState === 'active') onAppStateChange('active');
 }

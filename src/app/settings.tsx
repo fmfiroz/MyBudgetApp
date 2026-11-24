@@ -3,7 +3,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Modal,
@@ -11,7 +10,6 @@ import {
   SafeAreaView,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -22,13 +20,7 @@ import {
   DASHBOARD_ENABLED_MODULES_KEY,
   DEFAULT_ENABLED_MODULE_IDS,
 } from '../constants/dashboardModules';
-import {
-  isFirebaseSyncEnabled,
-  restoreFromFirebaseIfEnabled,
-  saveToLocalFirst,
-  setFirebaseSyncEnabled,
-  syncLocalToFirebaseIfEnabled,
-} from '../utils/localStorageManager';
+import { saveToLocalFirst } from '../utils/localStorageManager';
 
 export type AppLanguage = 'en' | 'bn';
 
@@ -44,8 +36,6 @@ export default function SettingsScreen() {
   const router = useRouter();
 
   const [lang, setLang] = useState<AppLanguage>('en');
-  const [firebaseSyncOn, setFirebaseSyncOn] = useState<boolean>(true);
-  const [syncingNow, setSyncingNow] = useState<boolean>(false);
 
   const [enabledModuleIds, setEnabledModuleIds] = useState<string[]>(
     DEFAULT_ENABLED_MODULE_IDS
@@ -60,14 +50,11 @@ export default function SettingsScreen() {
 
   const loadSettings = useCallback(async () => {
     try {
-      const [savedLang, savedModules, savedShops, syncEnabled] = await Promise.all([
+      const [savedLang, savedModules, savedShops] = await Promise.all([
         AsyncStorage.getItem(LANGUAGE_STORAGE_KEY),
         AsyncStorage.getItem(DASHBOARD_ENABLED_MODULES_KEY),
         AsyncStorage.getItem(SHOPS_LIST_KEY),
-        isFirebaseSyncEnabled(),
       ]);
-
-      setFirebaseSyncOn(syncEnabled);
 
       if (savedLang === 'en' || savedLang === 'bn') {
         setLang(savedLang);
@@ -97,69 +84,6 @@ export default function SettingsScreen() {
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
-
-  const handleToggleFirebaseSync = async (nextValue: boolean) => {
-    setFirebaseSyncOn(nextValue);
-    await setFirebaseSyncEnabled(nextValue);
-    if (nextValue) {
-      syncLocalToFirebaseIfEnabled().catch(() => {});
-    }
-  };
-
-  const handleManualPushSync = async () => {
-    if (!firebaseSyncOn) {
-      Alert.alert(
-        lang === 'bn' ? 'সিঙ্ক বন্ধ আছে' : 'Sync is OFF',
-        lang === 'bn'
-          ? 'ক্লাউডে ব্যাকআপ নিতে আগে Firebase Cloud Sync চালু (ON) করুন।'
-          : 'Please turn ON Firebase Cloud Sync first to backup data.'
-      );
-      return;
-    }
-
-    try {
-      setSyncingNow(true);
-      const count = await syncLocalToFirebaseIfEnabled();
-      Alert.alert(
-        lang === 'bn' ? 'সিঙ্ক সম্পন্ন' : 'Sync Complete',
-        lang === 'bn'
-          ? `মোট ${count} টি ডেটা রেকর্ড Firebase-এ আপডেট হয়েছে।`
-          : `Successfully synced ${count} records to Firebase.`
-      );
-    } catch (err: any) {
-      Alert.alert('Sync Error', err?.message || 'Unable to sync with Firebase.');
-    } finally {
-      setSyncingNow(false);
-    }
-  };
-
-  const handleManualRestoreSync = async () => {
-    if (!firebaseSyncOn) {
-      Alert.alert(
-        lang === 'bn' ? 'সিঙ্ক বন্ধ আছে' : 'Sync is OFF',
-        lang === 'bn'
-          ? 'ক্লাউড থেকে ডেটা আনতে আগে Firebase Cloud Sync চালু (ON) করুন।'
-          : 'Please turn ON Firebase Cloud Sync first to restore data.'
-      );
-      return;
-    }
-
-    try {
-      setSyncingNow(true);
-      const count = await restoreFromFirebaseIfEnabled();
-      await loadSettings();
-      Alert.alert(
-        lang === 'bn' ? 'রিস্টোর সম্পন্ন' : 'Restore Complete',
-        lang === 'bn'
-          ? `Firebase থেকে ${count} টি ডেটা রেকর্ড লোকাল স্টোরেজে আনা হয়েছে।`
-          : `Restored ${count} records from Firebase to local storage.`
-      );
-    } catch (err: any) {
-      Alert.alert('Restore Error', err?.message || 'Unable to restore from Firebase.');
-    } finally {
-      setSyncingNow(false);
-    }
-  };
 
   const handleSelectLanguage = async (nextLang: AppLanguage) => {
     setLang(nextLang);
@@ -257,8 +181,8 @@ const canConfirmStrictShopDelete = useMemo(() => {
           </Text>
           <Text style={styles.headerSub}>
             {lang === 'bn'
-              ? 'ক্লাউড সিঙ্ক, ড্যাশবোর্ড মডিউল, ভাষা ও Shop Debt'
-              : 'Cloud Sync, Dashboard Modules, Language & Shop Debt'}
+              ? 'স্বয়ংক্রিয় সিঙ্ক, মডিউল, ভাষা ও ব্যবস্থাপনা'
+              : 'Automatic sync, modules, language & management'}
           </Text>
         </View>
       </View>
@@ -267,7 +191,7 @@ const canConfirmStrictShopDelete = useMemo(() => {
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Firebase Cloud Sync Card (Default ON, User can turn OFF) */}
+        {/* Automatic Firebase Cloud Sync */}
         <View style={styles.card}>
           <View
             style={{
@@ -279,59 +203,22 @@ const canConfirmStrictShopDelete = useMemo(() => {
           >
             <View style={{ flex: 1 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Ionicons
-                  name={firebaseSyncOn ? 'cloud-done-outline' : 'cloud-offline-outline'}
-                  size={18}
-                  color={firebaseSyncOn ? '#2563EB' : '#64748B'}
-                />
+                <Ionicons name="cloud-done-outline" size={18} color="#2563EB" />
                 <Text style={styles.cardTitle}>Firebase Cloud Sync</Text>
               </View>
               <Text style={[styles.cardDesc, { marginTop: 3 }]}>
                 {lang === 'bn'
-                  ? 'ডিফল্টভাবে ON থাকে। চাইলে OFF করে ডেটা শুধু লোকাল স্টোরেজে রাখতে পারবেন।'
-                  : 'ON by default. Turn OFF if you want to keep data only in local storage.'}
+                  ? 'আপনার অ্যাকাউন্টের ডেটা স্বয়ংক্রিয়ভাবে সিঙ্ক হয়। অফলাইনে করা পরিবর্তন সংযোগ ফিরলে সিঙ্ক হবে।'
+                  : 'Account data syncs automatically. Offline changes sync when your connection returns.'}
               </Text>
             </View>
-
-            <Switch
-              value={firebaseSyncOn}
-              onValueChange={handleToggleFirebaseSync}
-              trackColor={{ false: '#CBD5E1', true: '#93C5FD' }}
-              thumbColor={firebaseSyncOn ? '#2563EB' : '#F1F5F9'}
-            />
-          </View>
-
-          {firebaseSyncOn && (
-            <View style={{ flexDirection: 'row', gap: 8, marginTop: 6 }}>
-              <TouchableOpacity
-                style={[styles.syncActionBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleManualPushSync}
-                disabled={syncingNow}
-              >
-                {syncingNow ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Ionicons name="cloud-upload-outline" size={16} color="#FFFFFF" />
-                    <Text style={styles.syncActionText}>
-                      {lang === 'bn' ? 'Backup Now' : 'Backup Now'}
-                    </Text>
-                  </>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.syncActionBtn, { backgroundColor: '#059669' }]}
-                onPress={handleManualRestoreSync}
-                disabled={syncingNow}
-              >
-                <Ionicons name="cloud-download-outline" size={16} color="#FFFFFF" />
-                <Text style={styles.syncActionText}>
-                  {lang === 'bn' ? 'Restore' : 'Restore'}
-                </Text>
-              </TouchableOpacity>
+            <View style={styles.syncStatusPill}>
+              <View style={styles.syncStatusDot} />
+              <Text style={styles.syncStatusText}>
+                {lang === 'bn' ? 'স্বয়ংক্রিয়' : 'Automatic'}
+              </Text>
             </View>
-          )}
+          </View>
         </View>
 
         {/* Dashboard Modules Add / Remove Card */}
@@ -341,23 +228,19 @@ const canConfirmStrictShopDelete = useMemo(() => {
               ? 'ড্যাশবোর্ড মডিউল (Add / Remove)'
               : 'Dashboard Modules (Add / Remove)'}
           </Text>
-          <Text style={styles.cardDesc}>
-            {lang === 'bn'
-              ? 'সাধারণত Budget, Shop Debt, Savings, Income, Reports থাকে। বাকিগুলো এখান থেকে Add বা Remove করতে পারবেন।'
-              : 'Budget, Shop Debt, Savings, Income & Reports are default; add or remove extra modules here.'}
-          </Text>
-
-          <View style={{ gap: 8, marginTop: 4 }}>
+          <View style={styles.moduleToggleGrid}>
             {safeModulesList.map((mod) => {
               const isAdded = safeEnabledIds.includes(mod.id);
               const label = lang === 'bn' ? mod.titleBn : mod.titleEn;
 
               return (
                 <View key={mod.id} style={styles.moduleToggleRow}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 }}>
-                    <Text style={{ fontSize: 20 }}>{mod.icon}</Text>
+                  <View style={styles.moduleToggleInfo}>
+                    <Text style={styles.moduleIcon}>{mod.icon}</Text>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.moduleToggleTitle}>{label}</Text>
+                      <Text style={styles.moduleToggleTitle} numberOfLines={1}>
+                        {label}
+                      </Text>
                       {mod.defaultEnabled && (
                         <Text style={styles.defaultTagText}>
                           {lang === 'bn' ? 'ডিফল্ট মডিউল' : 'Default'}
@@ -372,20 +255,15 @@ const canConfirmStrictShopDelete = useMemo(() => {
                       isAdded ? styles.modRemoveBtn : styles.modAddBtn,
                     ]}
                     onPress={() => handleToggleDashboardModule(mod.id)}
+                    accessibilityRole="switch"
+                    accessibilityState={{ checked: isAdded }}
+                    accessibilityLabel={`${isAdded ? 'Remove' : 'Add'} ${label}`}
                   >
                     <Ionicons
                       name={isAdded ? 'remove-circle-outline' : 'add-circle-outline'}
-                      size={16}
+                      size={15}
                       color={isAdded ? '#DC2626' : '#FFFFFF'}
                     />
-                    <Text
-                      style={[
-                        styles.modActionText,
-                        { color: isAdded ? '#DC2626' : '#FFFFFF' },
-                      ]}
-                    >
-                      {isAdded ? 'Remove' : 'Add'}
-                    </Text>
                   </TouchableOpacity>
                 </View>
               );
@@ -398,7 +276,7 @@ const canConfirmStrictShopDelete = useMemo(() => {
           <Text style={styles.cardTitle}>
             {lang === 'bn' ? 'ডিসপ্লে ভাষা (Language)' : 'Display Language'}
           </Text>
-          <View style={{ flexDirection: 'row', gap: 10, marginTop: 6 }}>
+          <View style={styles.languageToggle}>
             <TouchableOpacity
               style={[styles.langBtn, lang === 'en' && styles.langBtnActive]}
               onPress={() => handleSelectLanguage('en')}
@@ -413,10 +291,41 @@ const canConfirmStrictShopDelete = useMemo(() => {
               onPress={() => handleSelectLanguage('bn')}
             >
               <Text style={[styles.langBtnText, lang === 'bn' && styles.langBtnTextActive]}>
-                বাংলা (Bangla)
+                বাংলা
               </Text>
             </TouchableOpacity>
           </View>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>
+            {lang === 'bn' ? 'আয় ও যানবাহন ব্যবস্থাপনা' : 'Income & Vehicle Management'}
+          </Text>
+          <Text style={styles.cardDesc}>
+            {lang === 'bn'
+              ? 'Income ও Vehicle পেজে নতুন sheet যোগ করুন। এখানে সেগুলো manage বা delete করুন।'
+              : 'Add sheets from the Income and Vehicle pages. Open management here to delete them.'}
+          </Text>
+          <TouchableOpacity
+            style={styles.settingActionRow}
+            onPress={() => router.push('/income?manageSheets=1' as never)}
+          >
+            <Ionicons name="cash-outline" size={19} color="#15803D" />
+            <Text style={styles.settingActionText}>
+              {lang === 'bn' ? 'Income Sheet মুছুন' : 'Delete Income Sheets'}
+            </Text>
+            <Ionicons name="chevron-forward" size={17} color="#64748B" />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.settingActionRow}
+            onPress={() => router.push('/vehicle-expense?manage=1' as never)}
+          >
+            <Ionicons name="car-outline" size={19} color="#C2410C" />
+            <Text style={styles.settingActionText}>
+              {lang === 'bn' ? 'Vehicle পরিচালনা / মুছুন' : 'Manage / Delete Vehicles'}
+            </Text>
+            <Ionicons name="chevron-forward" size={17} color="#64748B" />
+          </TouchableOpacity>
         </View>
 
         {/* Shop Debt Store Management */}
@@ -624,48 +533,89 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#64748B',
   },
-  syncActionBtn: {
-    flex: 1,
+  settingActionRow: {
+    minHeight: 44,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 9,
-    borderRadius: 8,
+    gap: 10,
+    paddingHorizontal: 10,
+    borderRadius: 9,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  syncActionText: {
-    color: '#FFFFFF',
-    fontSize: 12.5,
+  settingActionText: {
+    flex: 1,
+    color: '#1E293B',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  moduleToggleGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    rowGap: 5,
+    marginTop: 2,
+  },
+  syncStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 20,
+    backgroundColor: '#ECFDF5',
+  },
+  syncStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#16A34A',
+  },
+  syncStatusText: {
+    color: '#15803D',
+    fontSize: 10.5,
     fontWeight: '700',
   },
   moduleToggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    borderRadius: 9,
+    width: '48%',
+    minHeight: 36,
+    paddingVertical: 4,
+    paddingHorizontal: 6,
+    borderRadius: 8,
     backgroundColor: '#F8FAFC',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    gap: 8,
+    gap: 5,
+  },
+  moduleToggleInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    flex: 1,
+  },
+  moduleIcon: {
+    fontSize: 13,
   },
   moduleToggleTitle: {
-    fontSize: 13,
+    fontSize: 11.5,
     fontWeight: '700',
     color: '#0F172A',
   },
   defaultTagText: {
-    fontSize: 10,
+    fontSize: 9,
     color: '#2563EB',
     fontWeight: '600',
   },
   modActionBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    justifyContent: 'center',
+    width: 25,
+    height: 25,
     borderRadius: 7,
     borderWidth: 1,
   },
@@ -677,25 +627,28 @@ const styles = StyleSheet.create({
     backgroundColor: '#FEF2F2',
     borderColor: '#FECACA',
   },
-  modActionText: {
-    fontSize: 11.5,
-    fontWeight: '700',
+  languageToggle: {
+    flexDirection: 'row',
+    alignSelf: 'flex-start',
+    minWidth: 168,
+    padding: 3,
+    marginTop: 4,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
   },
   langBtn: {
     flex: 1,
-    paddingVertical: 10,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 8,
   },
   langBtnActive: {
     backgroundColor: '#2563EB',
-    borderColor: '#2563EB',
   },
   langBtnText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: '#334155',
   },

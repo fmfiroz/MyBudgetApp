@@ -16,6 +16,7 @@ import {
   View,
 } from 'react-native';
 import { getCombinedIncomeForMonth } from '../utils/incomeSyncHelper';
+import { saveLocalData } from '../utils/firebaseSync';
 
 export type SavingsCategoryType = 'Insurance' | 'DPS' | 'Loan EMI' | 'Others';
 
@@ -256,15 +257,15 @@ export default function SavingsScreen() {
 
         const totalCombinedCents = savingsOnlyCents + loanEmiCents;
 
-        await AsyncStorage.setItem(
+        await saveLocalData(
           `${SAVINGS_MONTH_KEY_PREFIX}${ym}`,
-          JSON.stringify({
+          {
             yearMonth: ym,
             totalSavings: safeFromCents(totalCombinedCents),
             savingsOnly: safeFromCents(savingsOnlyCents),
             loanEmiTotal: safeFromCents(loanEmiCents),
             updatedAt: new Date().toISOString(),
-          })
+          }
         );
       }
     },
@@ -409,7 +410,7 @@ export default function SavingsScreen() {
 
     const nextPlans = [...plans, newPlan];
     setPlans(nextPlans);
-    await AsyncStorage.setItem(SAVINGS_ITEMS_KEY, JSON.stringify(nextPlans));
+    await saveLocalData(SAVINGS_ITEMS_KEY, nextPlans);
     await syncMonthlySavingsToBudget(fiscalStartYear, nextPlans);
 
     setItemName('');
@@ -437,7 +438,7 @@ export default function SavingsScreen() {
     if (!deleteTargetPlan || !isDeleteConditionMet) return;
     const remaining = plans.filter((p) => p.id !== deleteTargetPlan.id);
     setPlans(remaining);
-    await AsyncStorage.setItem(SAVINGS_ITEMS_KEY, JSON.stringify(remaining));
+    await saveLocalData(SAVINGS_ITEMS_KEY, remaining);
     await syncMonthlySavingsToBudget(fiscalStartYear, remaining);
     setDeleteTargetPlan(null);
     setDeleteCheckboxChecked(false);

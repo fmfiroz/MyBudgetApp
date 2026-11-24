@@ -22,6 +22,7 @@ import {
   MonthlyDebtRecord,
   saveShopDebtPaymentFromBudget,
 } from '../utils/shopDebtBudgetSync';
+import { saveLocalData } from '../utils/firebaseSync';
 
 interface ShopProfile {
   id: string;
@@ -583,7 +584,7 @@ export default function BudgetScreen() {
         isWelfareRow: r.id === WELFARE_ROW_ID || Boolean(r.isWelfareRow),
         isUserAdded: !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
       }));
-      await AsyncStorage.setItem(BUDGET_ROWS_META_KEY, JSON.stringify(metaPayload));
+      await saveLocalData(BUDGET_ROWS_META_KEY, metaPayload);
 
       setMonthNetSavings(netSavMap);
       setRows(baseRows);
@@ -690,7 +691,7 @@ export default function BudgetScreen() {
         isWelfareRow: r.id === WELFARE_ROW_ID || Boolean(r.isWelfareRow),
         isUserAdded: !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
       }));
-      await AsyncStorage.setItem(BUDGET_ROWS_META_KEY, JSON.stringify(metaPayload));
+      await saveLocalData(BUDGET_ROWS_META_KEY, metaPayload);
 
       for (const month of touchedMonths) {
         const ym = getYearMonthForFiscalMonth(month, fiscalStartYear);
@@ -714,7 +715,7 @@ export default function BudgetScreen() {
           rowCleared: clearedMap,
           updatedAt: new Date().toISOString(),
         };
-        await AsyncStorage.setItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`, JSON.stringify(payload));
+        await saveLocalData(`${BUDGET_MONTH_KEY_PREFIX}${ym}`, payload);
         await saveShopDebtPaymentFromBudget(ym, totalShopDebtVal);
       }
     },

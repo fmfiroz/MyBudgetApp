@@ -52,6 +52,31 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const confirmLegacyDataImport = (dataGroupCount: number) => {
+    const message =
+      `${dataGroupCount} unassigned local data group(s) were found on this device. ` +
+      'Their previous account cannot be determined. Import them into this account? ' +
+      'Existing cloud values will be kept when a data group conflicts.';
+
+    if (Platform.OS === 'web') {
+      return Promise.resolve(window.confirm(message));
+    }
+
+    return new Promise<boolean>((resolve) => {
+      Alert.alert('Unassigned local data', message, [
+        {
+          text: 'Keep separate',
+          style: 'cancel',
+          onPress: () => resolve(false),
+        },
+        {
+          text: 'Import to this account',
+          onPress: () => resolve(true),
+        },
+      ], { cancelable: false });
+    });
+  };
+
   useEffect(() => {
     if (Platform.OS !== 'web' && NativeGoogleSignin) {
       try {
@@ -75,6 +100,7 @@ export default function LoginScreen() {
       userId: user.uid,
       email: user.email,
       displayName: user.displayName,
+      confirmLegacyDataImport,
 
       // Existing Firebase data fetch
       fetchCloudDataFn: async (uid) => {
@@ -210,7 +236,7 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
-      await startGuestSession();
+      await startGuestSession(confirmLegacyDataImport);
       router.replace('/dashboard');
     } catch (error: any) {
       Alert.alert(
@@ -235,7 +261,7 @@ export default function LoginScreen() {
           <Text style={styles.logoIcon}>💰</Text>
         </View>
 
-        <Text style={styles.logo}>MyBudgetApp</Text>
+        <Text style={styles.logo}>My Budget</Text>
         <Text style={styles.tagline}>Manage your money, your way.</Text>
 
         <View style={styles.card}>
@@ -331,7 +357,7 @@ export default function LoginScreen() {
 
           <View style={styles.signupRow}>
             <Text style={styles.normalText}>
-              Don't have an account?{' '}
+              Don&apos;t have an account?{' '}
             </Text>
             <Link href="/register" style={styles.link}>
               Sign Up

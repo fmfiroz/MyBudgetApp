@@ -17,6 +17,11 @@ import {
     View,
 } from 'react-native';
 import { auth } from '../firebase';
+import {
+  fetchAllFirebaseData,
+  saveSnapshotToFirebase,
+} from '../utils/firebaseSync';
+import { syncUserAccountOnLogin } from '../utils/guestAuthSync';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -29,6 +34,28 @@ export default function LoginScreen() {
     window.alert(`${title}\n\n${message}`);
   };
 
+  const confirmLegacyDataImport = async (dataGroupCount: number) =>
+    window.confirm(
+      `${dataGroupCount} unassigned local data group(s) were found on this device. Their previous account cannot be determined. Import them into this account? Existing cloud values will be kept when a data group conflicts.`
+    );
+
+  const finalizeRegisteredLogin = async (user: {
+    uid: string;
+    email: string | null;
+    displayName: string | null;
+  }) => {
+    await syncUserAccountOnLogin({
+      userId: user.uid,
+      email: user.email,
+      displayName: user.displayName,
+      confirmLegacyDataImport,
+      fetchCloudDataFn: fetchAllFirebaseData,
+      saveCloudDataFn: async (uid, data) => {
+        await saveSnapshotToFirebase(uid, data);
+      },
+    });
+  };
+
   const handleLogin = async () => {
     if (!email.trim() || !password) {
       showMessage('Required', 'Email and password are required.');
@@ -38,7 +65,16 @@ export default function LoginScreen() {
     setLoading(true);
 
     try {
-      await signInWithEmailAndPassword(auth, email.trim(), password);
+      const credential = await signInWithEmailAndPassword(
+        auth,
+        email.trim(),
+        password
+      );
+      await finalizeRegisteredLogin({
+        uid: credential.user.uid,
+        email: credential.user.email,
+        displayName: credential.user.displayName,
+      });
       router.replace('/dashboard');
     } catch (error: any) {
       const messages: Record<string, string> = {
@@ -65,7 +101,12 @@ export default function LoginScreen() {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
 
-      await signInWithPopup(auth, provider);
+      const credential = await signInWithPopup(auth, provider);
+      await finalizeRegisteredLogin({
+        uid: credential.user.uid,
+        email: credential.user.email,
+        displayName: credential.user.displayName,
+      });
       router.replace('/dashboard');
     } catch (error: any) {
       showMessage(
@@ -87,7 +128,7 @@ export default function LoginScreen() {
           <Text style={styles.logoIcon}>💰</Text>
         </View>
 
-        <Text style={styles.logo}>MyBudgetApp</Text>
+        <Text style={styles.logo}>My Budget</Text>
         <Text style={styles.tagline}>Manage your money, your way.</Text>
 
         <View style={styles.card}>
@@ -158,7 +199,7 @@ export default function LoginScreen() {
           </TouchableOpacity>
 
           <View style={styles.signupRow}>
-            <Text style={styles.normalText}>Don't have an account? </Text>
+            <Text style={styles.normalText}>Don&apos;t have an account? </Text>
             <Link href="/register" style={styles.link}>Sign Up</Link>
           </View>
         </View>

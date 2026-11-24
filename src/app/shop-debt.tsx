@@ -16,7 +16,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
-import { pushAllLocalToFirebase } from '../utils/firebaseSync';
+import { saveLocalData } from '../utils/firebaseSync';
 import {
   ALL_UNITS,
   DebtLedgerEntry,
@@ -220,8 +220,7 @@ export default function ShopDebtScreen() {
     setNewShopNameInput('');
     setAddShopModalVisible(false);
 
-    await AsyncStorage.setItem(SHOPS_LIST_KEY, JSON.stringify(updated));
-    pushAllLocalToFirebase().catch(() => {});
+    await saveLocalData(SHOPS_LIST_KEY, updated);
   };
 
   const getClearedPaymentFromBudgetForShop = useCallback(
@@ -310,10 +309,7 @@ export default function ShopDebtScreen() {
           updatedAt: new Date().toISOString(),
         };
 
-        await AsyncStorage.setItem(
-          getShopMonthStorageKey(shopId, currentYM),
-          JSON.stringify(computed)
-        );
+        await saveLocalData(getShopMonthStorageKey(shopId, currentYM), computed);
 
         currentYM = getNextYearMonth(currentYM);
       }
@@ -622,13 +618,12 @@ export default function ShopDebtScreen() {
       updatedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(storageKey, JSON.stringify(updatedTarget));
+    await saveLocalData(storageKey, updatedTarget);
     setEntryModalVisible(false);
 
     const earliestYM = targetYM < timelineStartYM ? targetYM : timelineStartYM;
     await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
     await loadContinuousStream(currentShop.id, timelineStartYM);
-    pushAllLocalToFirebase().catch(() => {});
   };
 
   const canConfirmStrictEntryDelete = useMemo(() => {
@@ -660,7 +655,7 @@ export default function ShopDebtScreen() {
         updatedAt: new Date().toISOString(),
       };
 
-      await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
+      await saveLocalData(storageKey, updated);
     }
 
     setPendingDeleteItem(null);
@@ -670,7 +665,6 @@ export default function ShopDebtScreen() {
     const earliestYM = ym < timelineStartYM ? ym : timelineStartYM;
     await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
     await loadContinuousStream(currentShop.id, timelineStartYM);
-    pushAllLocalToFirebase().catch(() => {});
   };
 
   const openPaymentEditor = (ym: string, currentPaid: number) => {
@@ -698,13 +692,12 @@ export default function ShopDebtScreen() {
       updatedAt: new Date().toISOString(),
     };
 
-    await AsyncStorage.setItem(storageKey, JSON.stringify(updated));
+    await saveLocalData(storageKey, updated);
     setPaymentModalVisible(false);
 
     const earliestYM = paymentTargetYM < timelineStartYM ? paymentTargetYM : timelineStartYM;
     await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
     await loadContinuousStream(currentShop.id, timelineStartYM);
-    pushAllLocalToFirebase().catch(() => {});
   };
 
   const activeMonthBengaliLabel = useMemo(
@@ -884,8 +877,9 @@ export default function ShopDebtScreen() {
         )}
       </View>
 
-      {/* Shop Selector Strip + Add (+) Button */}
-      <View style={styles.shopSelectorBar}>
+      {/* Shop selector */}
+      {shops.length > 0 && (
+        <View style={styles.shopSelectorBar}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -915,24 +909,9 @@ export default function ShopDebtScreen() {
             );
           })}
 
-          <TouchableOpacity
-            style={styles.addShopChipBtn}
-            onPress={() => setAddShopModalVisible(true)}
-            accessibilityLabel="Add new shop"
-          >
-            <Ionicons name="add" size={16} color="#FFFFFF" />
-            <Text style={styles.addShopChipText}>দোকান</Text>
-          </TouchableOpacity>
-        </ScrollView>
-
-        <TouchableOpacity
-          style={styles.settingsShortcutBtn}
-          onPress={() => router.push('/settings' as any)}
-          accessibilityLabel="Manage Shops in Settings"
-        >
-          <Ionicons name="settings-outline" size={17} color="#1E293B" />
-        </TouchableOpacity>
-      </View>
+          </ScrollView>
+        </View>
+      )}
 
       {/* Empty State যখন কোনো দোকান যোগ করা হয়নি */}
       {shopsLoaded && shops.length === 0 ? (
@@ -942,7 +921,7 @@ export default function ShopDebtScreen() {
           </View>
           <Text style={styles.emptyShopTitle}>কোনো দোকান যোগ করা নেই</Text>
           <Text style={styles.emptyShopSub}>
-            বাকির হিসাব শুরু করতে উপরের অথবা নিচের + বাটনে চাপ দিয়ে দোকান তৈরি করুন।
+            বাকির হিসাব শুরু করতে নিচের বোতামে চাপ দিয়ে দোকান তৈরি করুন।
           </Text>
           <TouchableOpacity
             style={styles.emptyShopPrimaryBtn}
@@ -1413,27 +1392,6 @@ const styles = StyleSheet.create({
   },
   shopChipTextActive: {
     color: '#FFFFFF',
-  },
-  addShopChipBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#16A34A',
-  },
-  addShopChipText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#FFFFFF',
-  },
-  settingsShortcutBtn: {
-    padding: 6,
-    borderRadius: 8,
-    backgroundColor: '#F1F5F9',
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
   },
   emptyShopContainer: {
     flex: 1,

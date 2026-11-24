@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Print from 'expo-print';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { saveLocalData } from '../utils/firebaseSync';
 import {
   ActivityIndicator,
   Alert,
@@ -499,6 +500,10 @@ export async function getCombinedIncomeSummaryForFiscalYear(startYear: number): 
 
 export default function IncomeSheetScreen() {
   const router = useRouter();
+  const { manageSheets: manageSheetsParam } = useLocalSearchParams<{
+    manageSheets?: string;
+  }>();
+  const isSettingsManageMode = manageSheetsParam === '1';
   const { width: screenWidth } = useWindowDimensions();
 
   const isMobileScreen = screenWidth < 768;
@@ -618,7 +623,7 @@ export default function IncomeSheetScreen() {
         setStore(nextStore);
       }
       try {
-        await AsyncStorage.setItem(getStorageKey(startYr), JSON.stringify(nextStore));
+        await saveLocalData(getStorageKey(startYr), nextStore);
       } catch (e) {
         console.log('Failed to save income year store:', e);
       }
@@ -991,10 +996,10 @@ export default function IncomeSheetScreen() {
               }),
             };
           });
-          await AsyncStorage.setItem(
-            getStorageKey(nextFiscalStartYear),
-            JSON.stringify({ ...nextStore, sheets: syncedSheets })
-          );
+          await saveLocalData(getStorageKey(nextFiscalStartYear), {
+            ...nextStore,
+            sheets: syncedSheets,
+          });
         }
       } catch (e) {
         console.log('Next income year basic sync error:', e);
@@ -1165,7 +1170,7 @@ export default function IncomeSheetScreen() {
       <body>
         <div class="report-header">
           <h1>${activeSheet?.title || 'Income Sheet'} (${fiscalLabel}) — July ${fiscalStartYear} to June ${fiscalStartYear + 1}</h1>
-          <p>MyBudgetApp • Income Statement • Currency: BDT (Tk.)</p>
+          <p>My Budget • Income Statement • Currency: BDT (Tk.)</p>
         </div>
 
         <table>
@@ -1416,13 +1421,15 @@ export default function IncomeSheetScreen() {
               );
             })}
 
-            <TouchableOpacity style={styles.newSheetMiniBtn} onPress={openIncomeSetupWizard}>
-              <Ionicons name="add" size={15} color="#1D4ED8" />
-              <Text style={styles.newSheetMiniText}>Add Income</Text>
-            </TouchableOpacity>
+            {!isSettingsManageMode && (
+              <TouchableOpacity style={styles.newSheetMiniBtn} onPress={openIncomeSetupWizard}>
+                <Ionicons name="add" size={15} color="#1D4ED8" />
+                <Text style={styles.newSheetMiniText}>Add Income</Text>
+              </TouchableOpacity>
+            )}
           </ScrollView>
 
-          {activeSheet && (
+          {isSettingsManageMode && activeSheet && (
             <TouchableOpacity
               style={styles.deleteSheetIconBtn}
               onPress={() => {
@@ -1492,13 +1499,20 @@ export default function IncomeSheetScreen() {
         </View>
       )}
 
-      {/* শুরুতে একদম খালি অবস্থায় শুধু + Add Income বাটন */}
       {!activeSheet ? (
         <View style={styles.emptyStateContainer}>
-          <TouchableOpacity style={styles.primaryAddIncomeBtn} onPress={openIncomeSetupWizard}>
-            <Ionicons name="add" size={22} color="#FFFFFF" />
-            <Text style={styles.primaryAddIncomeText}>Add Income</Text>
-          </TouchableOpacity>
+          {!isSettingsManageMode ? (
+            <TouchableOpacity style={styles.primaryAddIncomeBtn} onPress={openIncomeSetupWizard}>
+              <Ionicons name="add" size={22} color="#FFFFFF" />
+              <Text style={styles.primaryAddIncomeText}>Add Income</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.noIncomeSheetHint}>
+              <Text style={styles.noIncomeSheetText}>
+                No income sheets to delete. Add a sheet from the Income page.
+              </Text>
+            </View>
+          )}
         </View>
       ) : activeSheet.kind === 'daily' ? (
         /* দৈনিক আয় (Daily Income Sheet) ভিউ */
@@ -2539,6 +2553,16 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 15.5,
     fontWeight: '700',
+  },
+  noIncomeSheetHint: {
+    alignItems: 'center',
+    gap: 12,
+    maxWidth: 340,
+  },
+  noIncomeSheetText: {
+    color: '#64748B',
+    fontSize: 13,
+    textAlign: 'center',
   },
   dailyContainer: {
     padding: 12,

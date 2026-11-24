@@ -1,5 +1,4 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { AppState, AppStateStatus } from 'react-native';
 import {
   collection,
   doc,
@@ -8,6 +7,7 @@ import {
   onSnapshot,
   setDoc,
 } from 'firebase/firestore';
+import { AppState, AppStateStatus } from 'react-native';
 import { auth } from '../firebase';
 
 const db = getFirestore();
@@ -274,7 +274,8 @@ async function flushPendingChanges(uid: string): Promise<void> {
       continue;
     }
 
-    const tsMs = entry.updatedAtMs || (await getLocalUpdatedAt(uid, entry.key)) || Date.now();
+    const tsMs =
+      entry.updatedAtMs || (await getLocalUpdatedAt(uid, entry.key)) || Date.now();
     await setDoc(
       doc(db, 'users', uid, 'mybudget_backup', toSafeDocId(entry.key)),
       {
@@ -387,10 +388,7 @@ export async function startFirebaseSync(uid: string): Promise<void> {
           const removedData = change.doc.data() as { key?: string };
           const keyFromDoc =
             removedData?.key ||
-            (await collectLocalSyncData() &&
-              Object.keys(await collectLocalSyncData()).find(
-                (k) => toSafeDocId(k) === change.doc.id
-              ));
+            Object.keys(localData).find((k) => toSafeDocId(k) === change.doc.id);
           if (keyFromDoc && isSyncKey(keyFromDoc)) {
             const localRaw = await AsyncStorage.getItem(keyFromDoc);
             if (localRaw !== null) {
@@ -434,7 +432,6 @@ export async function startFirebaseSync(uid: string): Promise<void> {
         const remoteTs = toEpochMs(payload.updatedAtMs ?? payload.updatedAt);
         const localTs = await getLocalUpdatedAt(uid, payload.key);
 
-        // Firestore নতুন হলে সেখান থেকে AsyncStorage আপডেট হবে
         if (remoteTs >= localTs) {
           await setLocalUpdatedAt(uid, payload.key, remoteTs || Date.now());
           entries.push([

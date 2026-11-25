@@ -23,6 +23,12 @@ import {
   DEFAULT_ENABLED_MODULE_IDS,
 } from '../constants/dashboardModules';
 import { auth } from '../firebase';
+import { stopFirebaseSync } from '../utils/firebaseSync';
+import {
+  AuthSessionState,
+  exitGuestSession,
+  getAuthSession,
+} from '../utils/guestAuthSync';
 
 type AppLanguage = 'en' | 'bn';
 
@@ -37,43 +43,65 @@ export default function HomeScreen() {
   const [enabledModuleIds, setEnabledModuleIds] = useState<string[]>(
     DEFAULT_ENABLED_MODULE_IDS
   );
+  const [sessionState, setSessionState] = useState<AuthSessionState | null>(
+    null
+  );
+  const [sessionLoaded, setSessionLoaded] = useState<boolean>(false);
   const [drawerVisible, setDrawerVisible] = useState<boolean>(false);
   const [loggingOut, setLoggingOut] = useState<boolean>(false);
 
   const slideAnim = useRef(new Animated.Value(-drawerWidth)).current;
   const backdropAnim = useRef(new Animated.Value(0)).current;
 
-  const loadDashboardPrefs = useCallback(async () => {
+  const loadDashboardPrefs = useCallback(async (isActive?: () => boolean) => {
     try {
-      const [savedLang, savedModules] = await Promise.all([
+      const [savedLang, savedModules, currentSession] = await Promise.all([
         AsyncStorage.getItem(LANGUAGE_STORAGE_KEY),
         AsyncStorage.getItem(DASHBOARD_ENABLED_MODULES_KEY),
+        getAuthSession(),
       ]);
+
+      if (isActive && !isActive()) return;
+
+      setSessionState(currentSession);
+      setSessionLoaded(true);
 
       if (savedLang === 'en' || savedLang === 'bn') {
         setLang(savedLang);
       }
 
       if (savedModules) {
-        const parsed = JSON.parse(savedModules);
+        const parsed: unknown = JSON.parse(savedModules);
         if (Array.isArray(parsed)) {
-          setEnabledModuleIds(parsed.filter((id): id is string => typeof id === 'string'));
+          setEnabledModuleIds(
+            parsed.filter((id): id is string => typeof id === 'string')
+          );
           return;
         }
       }
       setEnabledModuleIds(DEFAULT_ENABLED_MODULE_IDS);
     } catch {
+      if (isActive && !isActive()) return;
+      setSessionLoaded(true);
       setEnabledModuleIds(DEFAULT_ENABLED_MODULE_IDS);
     }
   }, []);
 
   useEffect(() => {
-    loadDashboardPrefs();
+    let active = true;
+    void loadDashboardPrefs(() => active);
+    return () => {
+      active = false;
+    };
   }, [loadDashboardPrefs]);
 
   useFocusEffect(
     useCallback(() => {
-      loadDashboardPrefs();
+      let active = true;
+      void loadDashboardPrefs(() => active);
+      return () => {
+        active = false;
+      };
     }, [loadDashboardPrefs])
   );
 
@@ -122,9 +150,13 @@ export default function HomeScreen() {
   };
 
   const visibleMenuItems = useMemo(() => {
-    const safeList = Array.isArray(ALL_DASHBOARD_MODULES) ? ALL_DASHBOARD_MODULES : [];
+    const safeList = Array.isArray(ALL_DASHBOARD_MODULES)
+      ? ALL_DASHBOARD_MODULES
+      : [];
     const idSet = new Set(
-      Array.isArray(enabledModuleIds) ? enabledModuleIds : DEFAULT_ENABLED_MODULE_IDS
+      Array.isArray(enabledModuleIds)
+        ? enabledModuleIds
+        : DEFAULT_ENABLED_MODULE_IDS
     );
     return safeList.filter((item) => idSet.has(item.id));
   }, [enabledModuleIds]);
@@ -132,11 +164,22 @@ export default function HomeScreen() {
   const performLogout = async () => {
     try {
       setLoggingOut(true);
-      await signOut(auth);
+      stopFirebaseSync();
+
+      if (sessionState?.mode === 'guest') {
+        await exitGuestSession();
+      } else {
+        await signOut(auth);
+        await AsyncStorage.removeItem('@mybudget_auth_session_v1');
+      }
+
       setDrawerVisible(false);
       router.replace('/login');
-    } catch (error: any) {
-      const message = error?.message || 'Unable to logout.';
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error && error.message
+          ? error.message
+          : 'Unable to logout.';
       if (Platform.OS === 'web') {
         window.alert(message);
       } else {
@@ -151,12 +194,16 @@ export default function HomeScreen() {
 
     const confirmMsg =
       lang === 'bn'
-        ? 'আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?'
-        : 'Are you sure you want to logout from your account?';
+        ? sessionState?.mode === 'guest'
+          ? 'Guest মোড থেকে বের হতে চান? আপনার Guest ডেটা লোকালি সংরক্ষিত থাকবে।'
+          : 'আপনি কি অ্যাকাউন্ট থেকে Logout করতে চান?'
+        : sessionState?.mode === 'guest'
+          ? 'Exit guest mode? Your guest data will remain saved locally.'
+          : 'Are you sure you want to logout from your account?';
 
     const runLogoutAfterClose = () => {
       closeDrawer(() => {
-        performLogout();
+        void performLogout();
       });
     };
 
@@ -176,7 +223,20 @@ export default function HomeScreen() {
     }
   };
 
-  const userEmail = auth.currentUser?.email || 'fmfiroznp@gmail.com';
+  const isGuest =
+    sessionState?.mode === 'guest' || (sessionLoaded && !auth.currentUser);
+  const userName = isGuest
+    ? lang === 'bn'
+      ? 'গেস্ট ইউজার'
+      : 'Guest User'
+    : auth.currentUser?.displayName ||
+      sessionState?.displayName ||
+      'Account User';
+  const userEmail = isGuest
+    ? lang === 'bn'
+      ? 'লোকাল গেস্ট সেশন'
+      : 'Local Guest Session'
+    : auth.currentUser?.email || sessionState?.email || 'Signed In';
 
   return (
     <SafeAreaView style={styles.container}>
@@ -200,12 +260,17 @@ export default function HomeScreen() {
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+      >
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
             <Ionicons name="sparkles" size={13} color="#1D4ED8" />
             <Text style={styles.heroBadgeText}>
-              {lang === 'bn' ? 'স্মার্ট ফিন্যান্স ওয়ার্কস্পেস' : 'Smart Finance Workspace'}
+              {lang === 'bn'
+                ? 'স্মার্ট ফিন্যান্স ওয়ার্কস্পেস'
+                : 'Smart Finance Workspace'}
             </Text>
           </View>
           <Text style={styles.heroHeading}>
@@ -226,7 +291,8 @@ export default function HomeScreen() {
               {lang === 'bn' ? 'হিসাবের মডিউলসমূহ' : 'Finance Modules'}
             </Text>
             <Text style={styles.sectionCount}>
-              {visibleMenuItems.length} {lang === 'bn' ? 'টি মডিউল' : 'modules'}
+              {visibleMenuItems.length}{' '}
+              {lang === 'bn' ? 'টি মডিউল' : 'modules'}
             </Text>
           </View>
 
@@ -240,7 +306,12 @@ export default function HomeScreen() {
                   activeOpacity={0.78}
                   onPress={() => router.push(item.route as never)}
                 >
-                  <View style={[styles.cardTopAccent, { backgroundColor: item.color }]} />
+                  <View
+                    style={[
+                      styles.cardTopAccent,
+                      { backgroundColor: item.color },
+                    ]}
+                  />
 
                   <View
                     style={[
@@ -259,7 +330,11 @@ export default function HomeScreen() {
                     <Text style={[styles.openText, { color: item.color }]}>
                       {lang === 'bn' ? 'খুলুন' : 'Open'}
                     </Text>
-                    <Ionicons name="chevron-forward" size={15} color={item.color} />
+                    <Ionicons
+                      name="chevron-forward"
+                      size={15}
+                      color={item.color}
+                    />
                   </View>
                 </TouchableOpacity>
               );
@@ -275,8 +350,13 @@ export default function HomeScreen() {
         onRequestClose={() => closeDrawer()}
       >
         <View style={styles.drawerBackdrop}>
-          <Animated.View style={[styles.drawerScrimLayer, { opacity: backdropAnim }]}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => closeDrawer()} />
+          <Animated.View
+            style={[styles.drawerScrimLayer, { opacity: backdropAnim }]}
+          >
+            <Pressable
+              style={StyleSheet.absoluteFill}
+              onPress={() => closeDrawer()}
+            />
           </Animated.View>
 
           <Animated.View
@@ -308,14 +388,13 @@ export default function HomeScreen() {
                   <Ionicons name="person" size={26} color="#FFFFFF" />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.userNameText}>Firoz Mahmud</Text>
+                  <Text style={styles.userNameText}>{userName}</Text>
                   <Text style={styles.userEmailText} numberOfLines={1}>
                     {userEmail}
                   </Text>
                 </View>
               </View>
 
-              {/* Drawer Navigation Shortcuts + Settings */}
               <View style={styles.navSectionBox}>
                 <Text style={styles.infoSectionTitle}>
                   {lang === 'bn' ? 'নেভিগেশন' : 'Navigation'}
@@ -376,7 +455,11 @@ export default function HomeScreen() {
                   {lang === 'bn' ? 'ডেভেলপার তথ্য' : 'Developer Info'}
                 </Text>
                 <View style={styles.devRow}>
-                  <Ionicons name="code-slash-outline" size={18} color="#2563EB" />
+                  <Ionicons
+                    name="code-slash-outline"
+                    size={18}
+                    color="#2563EB"
+                  />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.devName}>Firoz Mahmud</Text>
                     <Text style={styles.devSub}>
@@ -559,12 +642,11 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '700',
   },
-
   drawerBackdrop: {
     flex: 1,
     flexDirection: 'row',
   },
-drawerScrimLayer: {
+  drawerScrimLayer: {
     ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(15, 23, 42, 0.48)',
   },

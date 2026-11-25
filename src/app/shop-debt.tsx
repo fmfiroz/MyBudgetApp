@@ -1,40 +1,40 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useWindowDimensions,
-  View,
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
 } from 'react-native';
 import { saveLocalData } from '../utils/firebaseSync';
 import {
-  ALL_UNITS,
-  DebtLedgerEntry,
-  formatBengaliYearMonth,
-  getCurrentYearMonth,
-  getNextYearMonth,
-  getPreviousDDMMYYYY,
-  getPrevYearMonth,
-  getProductCatalog,
-  getSortedUnitsByFrequency,
-  getTodayDDMMYYYY,
-  MeasurementUnit,
-  MonthlyDebtRecord,
-  normalizeUnit,
-  parseDateToYearMonth,
-  recordUnitUsage,
-  ShopProductCatalogItem,
-  upsertProductCatalogItem,
+    ALL_UNITS,
+    DebtLedgerEntry,
+    formatBengaliYearMonth,
+    getCurrentYearMonth,
+    getNextYearMonth,
+    getPreviousDDMMYYYY,
+    getPrevYearMonth,
+    getProductCatalog,
+    getSortedUnitsByFrequency,
+    getTodayDDMMYYYY,
+    MeasurementUnit,
+    MonthlyDebtRecord,
+    normalizeUnit,
+    parseDateToYearMonth,
+    recordUnitUsage,
+    ShopProductCatalogItem,
+    upsertProductCatalogItem,
 } from '../utils/shopDebtBudgetSync';
 
 interface ShopProfile {
@@ -112,21 +112,24 @@ export default function ShopDebtScreen() {
   const { width: screenWidth } = useWindowDimensions();
 
   const cardHorizontalMargin = 10;
-  const cardWidth = Math.max(300, Math.min(screenWidth - cardHorizontalMargin * 2, 520));
+  const cardWidth = Math.max(
+    300,
+    Math.min(screenWidth - cardHorizontalMargin * 2, 520)
+  );
   const snapInterval = cardWidth + 12;
 
-  const horizontalScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(null);
+  const horizontalScrollRef = useRef<React.ComponentRef<typeof ScrollView> | null>(
+    null
+  );
   const initialScrollDoneRef = useRef<boolean>(false);
   const snapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const systemCurrentYM = getCurrentYearMonth();
 
-  // আগে থেকে কোনো ডিফল্ট দোকান থাকবে না; ইউজার + বাটন দিয়ে যোগ করবেন
   const [shops, setShops] = useState<ShopProfile[]>([]);
   const [shopsLoaded, setShopsLoaded] = useState<boolean>(false);
   const [selectedShopId, setSelectedShopId] = useState<string>('');
 
-  // নতুন দোকান যোগ করার Modal
   const [addShopModalVisible, setAddShopModalVisible] = useState<boolean>(false);
   const [newShopNameInput, setNewShopNameInput] = useState<string>('');
 
@@ -138,20 +141,32 @@ export default function ShopDebtScreen() {
     return cursor;
   });
 
-  const [activeSlideYM, setActiveSlideYM] = useState<string>(() => systemCurrentYM);
-  const [continuousRecords, setContinuousRecords] = useState<MonthlyDebtRecord[]>([]);
+  const [activeSlideYM, setActiveSlideYM] = useState<string>(
+    () => systemCurrentYM
+  );
+  const [continuousRecords, setContinuousRecords] = useState<
+    MonthlyDebtRecord[]
+  >([]);
   const [catalog, setCatalog] = useState<ShopProductCatalogItem[]>([]);
-  const [sortedUnits, setSortedUnits] = useState<MeasurementUnit[]>(() => [...ALL_UNITS]);
+  const [sortedUnits, setSortedUnits] = useState<MeasurementUnit[]>(() => [
+    ...ALL_UNITS,
+  ]);
 
   const [activeDropdownRow, setActiveDropdownRow] = useState<number | null>(null);
-  const [activeSuggestionRow, setActiveSuggestionRow] = useState<number | null>(null);
+  const [activeSuggestionRow, setActiveSuggestionRow] = useState<number | null>(
+    null
+  );
 
   const [entryModalVisible, setEntryModalVisible] = useState<boolean>(false);
   const [entryDate, setEntryDate] = useState<string>(() => getTodayDDMMYYYY());
-  const [draftItems, setDraftItems] = useState<DraftBatchItem[]>([createEmptyDraftItem('pcs')]);
+  const [draftItems, setDraftItems] = useState<DraftBatchItem[]>([
+    createEmptyDraftItem('pcs'),
+  ]);
 
   const [paymentModalVisible, setPaymentModalVisible] = useState<boolean>(false);
-  const [paymentTargetYM, setPaymentTargetYM] = useState<string>(() => systemCurrentYM);
+  const [paymentTargetYM, setPaymentTargetYM] = useState<string>(
+    () => systemCurrentYM
+  );
   const [paymentInput, setPaymentInput] = useState<string>('0');
 
   const [pendingDeleteItem, setPendingDeleteItem] = useState<{
@@ -165,7 +180,6 @@ export default function ShopDebtScreen() {
     return continuousRecords.map((_, idx) => idx * snapInterval);
   }, [continuousRecords.length, snapInterval]);
 
-  // পেজ মাউন্ট হলে একবারই দোকানের তালিকা লোড করা (ফ্রিজ হওয়া রোধ করতে)
   useEffect(() => {
     let isMounted = true;
     const initLoad = async () => {
@@ -187,7 +201,7 @@ export default function ShopDebtScreen() {
         if (isMounted) setShopsLoaded(true);
       }
     };
-    initLoad();
+    void initLoad();
     return () => {
       isMounted = false;
     };
@@ -208,25 +222,32 @@ export default function ShopDebtScreen() {
       return;
     }
 
-    const newShop: ShopProfile = {
-      id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-      name: cleanName,
-    };
+    try {
+      const newShop: ShopProfile = {
+        id: `shop-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+        name: cleanName,
+      };
 
-    const updated = [...shops, newShop];
-    setShops(updated);
-    setSelectedShopId(newShop.id);
-    initialScrollDoneRef.current = false;
-    setNewShopNameInput('');
-    setAddShopModalVisible(false);
+      const updated = [...shops, newShop];
+      setShops(updated);
+      setSelectedShopId(newShop.id);
+      initialScrollDoneRef.current = false;
+      setNewShopNameInput('');
+      setAddShopModalVisible(false);
 
-    await saveLocalData(SHOPS_LIST_KEY, updated);
+      await saveLocalData(SHOPS_LIST_KEY, updated);
+    } catch (e) {
+      console.log('Failed to create new shop:', e);
+      Alert.alert('ত্রুটি', 'নতুন দোকান সেভ করা যায়নি।');
+    }
   };
 
   const getClearedPaymentFromBudgetForShop = useCallback(
     async (shopId: string, ym: string): Promise<number | null> => {
       try {
-        const rawBudget = await AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`);
+        const rawBudget = await AsyncStorage.getItem(
+          `${BUDGET_MONTH_KEY_PREFIX}${ym}`
+        );
         if (!rawBudget) return null;
 
         const parsed = JSON.parse(rawBudget) as {
@@ -236,7 +257,9 @@ export default function ShopDebtScreen() {
 
         const budgetRowId = getBudgetRowIdForShop(shopId);
         if (parsed.rowCleared?.[budgetRowId]) {
-          const clearedVal = safeFromCents(safeToCents(parsed.rowAmounts?.[budgetRowId]));
+          const clearedVal = safeFromCents(
+            safeToCents(parsed.rowAmounts?.[budgetRowId])
+          );
           return clearedVal > 0 ? clearedVal : 0;
         }
         return null;
@@ -250,68 +273,86 @@ export default function ShopDebtScreen() {
   const recalculateShopChainFromMonth = useCallback(
     async (shopId: string, startYM: string, maxSteps = 14): Promise<void> => {
       if (!shopId) return;
-      let currentYM = startYM;
+      try {
+        let currentYM = startYM;
 
-      for (let step = 0; step < maxSteps; step++) {
-        const prevYM = getPrevYearMonth(currentYM);
-        const prevRaw = await AsyncStorage.getItem(getShopMonthStorageKey(shopId, prevYM));
-        let prevCarryoverCents = 0;
+        for (let step = 0; step < maxSteps; step++) {
+          const prevYM = getPrevYearMonth(currentYM);
+          const prevRaw = await AsyncStorage.getItem(
+            getShopMonthStorageKey(shopId, prevYM)
+          );
+          let prevCarryoverCents = 0;
 
-        if (prevRaw) {
-          const prevParsed = JSON.parse(prevRaw) as Partial<MonthlyDebtRecord>;
-          prevCarryoverCents = safeToCents(prevParsed.totalBalanceDue);
+          if (prevRaw) {
+            const prevParsed = JSON.parse(prevRaw) as Partial<MonthlyDebtRecord>;
+            prevCarryoverCents = safeToCents(prevParsed.totalBalanceDue);
+          }
+
+          const raw = await AsyncStorage.getItem(
+            getShopMonthStorageKey(shopId, currentYM)
+          );
+          const parsed: Partial<MonthlyDebtRecord> = raw
+            ? (JSON.parse(raw) as Partial<MonthlyDebtRecord>)
+            : {};
+
+          const existingEntries: DebtLedgerEntry[] = Array.isArray(parsed.entries)
+            ? parsed.entries.map((e) => {
+                const qty = Number(e.quantity) > 0 ? Number(e.quantity) : 1;
+                const uPriceCents = safeToCents(e.unitPrice);
+                const amtCents =
+                  safeToCents(e.amount) > 0
+                    ? safeToCents(e.amount)
+                    : Math.round(qty * uPriceCents);
+                return {
+                  ...e,
+                  unit: normalizeUnit(e.unit),
+                  quantity: qty,
+                  unitPrice: safeFromCents(uPriceCents),
+                  amount: safeFromCents(amtCents),
+                };
+              })
+            : [];
+
+          const budgetClearedPaid = await getClearedPaymentFromBudgetForShop(
+            shopId,
+            currentYM
+          );
+
+          let paidCents =
+            parsed.paidAmount !== undefined
+              ? Math.max(0, safeToCents(parsed.paidAmount))
+              : 0;
+
+          if (budgetClearedPaid !== null && safeToCents(budgetClearedPaid) > 0) {
+            paidCents = safeToCents(budgetClearedPaid);
+          }
+
+          const jerCents = prevCarryoverCents - paidCents;
+          const currentDebtCents = existingEntries.reduce(
+            (sum, item) => sum + safeToCents(item.amount),
+            0
+          );
+          const totalDueCents = jerCents + currentDebtCents;
+
+          const computed: MonthlyDebtRecord = {
+            yearMonth: currentYM,
+            prevMonthCarryover: safeFromCents(prevCarryoverCents),
+            paidAmount: safeFromCents(paidCents),
+            entries: existingEntries,
+            currentMonthDebt: safeFromCents(currentDebtCents),
+            totalBalanceDue: safeFromCents(totalDueCents),
+            updatedAt: new Date().toISOString(),
+          };
+
+          await saveLocalData(
+            getShopMonthStorageKey(shopId, currentYM),
+            computed
+          );
+
+          currentYM = getNextYearMonth(currentYM);
         }
-
-        const raw = await AsyncStorage.getItem(getShopMonthStorageKey(shopId, currentYM));
-        const parsed: Partial<MonthlyDebtRecord> = raw
-          ? (JSON.parse(raw) as Partial<MonthlyDebtRecord>)
-          : {};
-
-        const existingEntries: DebtLedgerEntry[] = Array.isArray(parsed.entries)
-          ? parsed.entries.map((e) => {
-              const qty = Number(e.quantity) > 0 ? Number(e.quantity) : 1;
-              const uPriceCents = safeToCents(e.unitPrice);
-              const amtCents =
-                safeToCents(e.amount) > 0 ? safeToCents(e.amount) : Math.round(qty * uPriceCents);
-              return {
-                ...e,
-                unit: normalizeUnit(e.unit),
-                quantity: qty,
-                unitPrice: safeFromCents(uPriceCents),
-                amount: safeFromCents(amtCents),
-              };
-            })
-          : [];
-
-        const budgetClearedPaid = await getClearedPaymentFromBudgetForShop(shopId, currentYM);
-
-        let paidCents =
-          parsed.paidAmount !== undefined ? Math.max(0, safeToCents(parsed.paidAmount)) : 0;
-
-        if (budgetClearedPaid !== null && safeToCents(budgetClearedPaid) > 0) {
-          paidCents = safeToCents(budgetClearedPaid);
-        }
-
-        const jerCents = prevCarryoverCents - paidCents;
-        const currentDebtCents = existingEntries.reduce(
-          (sum, item) => sum + safeToCents(item.amount),
-          0
-        );
-        const totalDueCents = jerCents + currentDebtCents;
-
-        const computed: MonthlyDebtRecord = {
-          yearMonth: currentYM,
-          prevMonthCarryover: safeFromCents(prevCarryoverCents),
-          paidAmount: safeFromCents(paidCents),
-          entries: existingEntries,
-          currentMonthDebt: safeFromCents(currentDebtCents),
-          totalBalanceDue: safeFromCents(totalDueCents),
-          updatedAt: new Date().toISOString(),
-        };
-
-        await saveLocalData(getShopMonthStorageKey(shopId, currentYM), computed);
-
-        currentYM = getNextYearMonth(currentYM);
+      } catch (e) {
+        console.log('Failed to recalculate shop debt chain:', e);
       }
     },
     [getClearedPaymentFromBudgetForShop]
@@ -336,7 +377,9 @@ export default function ShopDebtScreen() {
         const [recordsList, catList, unitsList] = await Promise.all([
           Promise.all(
             months.map(async (ym) => {
-              const raw = await AsyncStorage.getItem(getShopMonthStorageKey(shopId, ym));
+              const raw = await AsyncStorage.getItem(
+                getShopMonthStorageKey(shopId, ym)
+              );
               if (raw) {
                 return JSON.parse(raw) as MonthlyDebtRecord;
               }
@@ -367,7 +410,7 @@ export default function ShopDebtScreen() {
 
   useEffect(() => {
     if (currentShop?.id) {
-      loadContinuousStream(currentShop.id, timelineStartYM);
+      void loadContinuousStream(currentShop.id, timelineStartYM);
     } else {
       setContinuousRecords([]);
     }
@@ -455,7 +498,9 @@ export default function ShopDebtScreen() {
   };
 
   const handleSlideByStep = (delta: -1 | 1) => {
-    const currentIdx = continuousRecords.findIndex((r) => r.yearMonth === activeSlideYM);
+    const currentIdx = continuousRecords.findIndex(
+      (r) => r.yearMonth === activeSlideYM
+    );
     if (currentIdx >= 0) {
       const nextIdx = currentIdx + delta;
       if (nextIdx >= 0 && nextIdx < continuousRecords.length) {
@@ -463,7 +508,9 @@ export default function ShopDebtScreen() {
         return;
       }
     }
-    setTimelineStartYM((prev) => (delta < 0 ? getPrevYearMonth(prev) : getNextYearMonth(prev)));
+    setTimelineStartYM((prev) =>
+      delta < 0 ? getPrevYearMonth(prev) : getNextYearMonth(prev)
+    );
   };
 
   const openNewEntryModal = (targetYM?: string) => {
@@ -471,7 +518,9 @@ export default function ShopDebtScreen() {
     const target = targetYM || activeSlideYM || getCurrentYearMonth();
     const [yStr, mStr] = target.split('-');
     const isCurrentMonth = target === getCurrentYearMonth();
-    const defaultDateStr = isCurrentMonth ? getTodayDDMMYYYY() : `01/${mStr}/${yStr}`;
+    const defaultDateStr = isCurrentMonth
+      ? getTodayDDMMYYYY()
+      : `01/${mStr}/${yStr}`;
 
     const topUnit = sortedUnits[0] || 'pcs';
     setEntryDate(defaultDateStr);
@@ -494,7 +543,8 @@ export default function ShopDebtScreen() {
 
   const handleRemoveDraftRow = (index: number) => {
     setDraftItems((prev) => {
-      if (prev.length <= 1) return [createEmptyDraftItem(sortedUnits[0] || 'pcs')];
+      if (prev.length <= 1)
+        return [createEmptyDraftItem(sortedUnits[0] || 'pcs')];
       return prev.filter((_, idx) => idx !== index);
     });
   };
@@ -511,14 +561,20 @@ export default function ShopDebtScreen() {
     });
   };
 
-  const handleSelectUnitFromDropdown = async (index: number, unit: MeasurementUnit) => {
+  const handleSelectUnitFromDropdown = async (
+    index: number,
+    unit: MeasurementUnit
+  ) => {
     handleUpdateDraftField(index, 'unit', unit);
     setActiveDropdownRow(null);
     const updatedOrder = await recordUnitUsage(unit);
     setSortedUnits(updatedOrder);
   };
 
-  const handleApplyCatalogSuggestion = (index: number, item: ShopProductCatalogItem) => {
+  const handleApplyCatalogSuggestion = (
+    index: number,
+    item: ShopProductCatalogItem
+  ) => {
     setDraftItems((prev) => {
       const copy = [...prev];
       copy[index] = {
@@ -559,15 +615,24 @@ export default function ShopDebtScreen() {
       }
 
       if (!cleanDesc) {
-        Alert.alert('তথ্য অসম্পূর্ণ', `সারি #${i + 1}-এ পণ্যের নাম লিখুন।`);
+        Alert.alert(
+          'তথ্য অসম্পূর্ণ',
+          `সারি #${i + 1}-এ পণ্যের নাম লিখুন।`
+        );
         return;
       }
       if (!Number.isFinite(qty) || qty <= 0) {
-        Alert.alert('সঠিক Quantity দিন', `সারি #${i + 1}-এ Quantity ০-এর বেশি হতে হবে।`);
+        Alert.alert(
+          'সঠিক Quantity দিন',
+          `সারি #${i + 1}-এ Quantity ০-এর বেশি হতে হবে।`
+        );
         return;
       }
       if (priceCents <= 0) {
-        Alert.alert('সঠিক মূল্য দিন', `সারি #${i + 1}-এ Price ০-এর বেশি হতে হবে।`);
+        Alert.alert(
+          'সঠিক মূল্য দিন',
+          `সারি #${i + 1}-এ Price ০-এর বেশি হতে হবে।`
+        );
         return;
       }
 
@@ -587,7 +652,12 @@ export default function ShopDebtScreen() {
       });
 
       latestUnits = await recordUnitUsage(cleanUnit);
-      latestCatalog = await upsertProductCatalogItem(cleanDesc, unitPrice, qty, cleanUnit);
+      latestCatalog = await upsertProductCatalogItem(
+        cleanDesc,
+        unitPrice,
+        qty,
+        cleanUnit
+      );
     }
 
     if (validEntries.length === 0) {
@@ -595,76 +665,96 @@ export default function ShopDebtScreen() {
       return;
     }
 
-    setCatalog(latestCatalog);
-    setSortedUnits(latestUnits);
+    try {
+      setCatalog(latestCatalog);
+      setSortedUnits(latestUnits);
 
-    const storageKey = getShopMonthStorageKey(currentShop.id, targetYM);
-    const targetRaw = await AsyncStorage.getItem(storageKey);
-    const targetParsed: Partial<MonthlyDebtRecord> = targetRaw
-      ? (JSON.parse(targetRaw) as Partial<MonthlyDebtRecord>)
-      : {};
+      const storageKey = getShopMonthStorageKey(currentShop.id, targetYM);
+      const targetRaw = await AsyncStorage.getItem(storageKey);
+      const targetParsed: Partial<MonthlyDebtRecord> = targetRaw
+        ? (JSON.parse(targetRaw) as Partial<MonthlyDebtRecord>)
+        : {};
 
-    const existingEntries: DebtLedgerEntry[] = Array.isArray(targetParsed.entries)
-      ? targetParsed.entries
-      : [];
+      const existingEntries: DebtLedgerEntry[] = Array.isArray(
+        targetParsed.entries
+      )
+        ? targetParsed.entries
+        : [];
 
-    const updatedTarget: MonthlyDebtRecord = {
-      yearMonth: targetYM,
-      prevMonthCarryover: safeFromCents(safeToCents(targetParsed.prevMonthCarryover)),
-      paidAmount: safeFromCents(safeToCents(targetParsed.paidAmount)),
-      entries: [...existingEntries, ...validEntries],
-      currentMonthDebt: 0,
-      totalBalanceDue: 0,
-      updatedAt: new Date().toISOString(),
-    };
+      const updatedTarget: MonthlyDebtRecord = {
+        yearMonth: targetYM,
+        prevMonthCarryover: safeFromCents(
+          safeToCents(targetParsed.prevMonthCarryover)
+        ),
+        paidAmount: safeFromCents(safeToCents(targetParsed.paidAmount)),
+        entries: [...existingEntries, ...validEntries],
+        currentMonthDebt: 0,
+        totalBalanceDue: 0,
+        updatedAt: new Date().toISOString(),
+      };
 
-    await saveLocalData(storageKey, updatedTarget);
-    setEntryModalVisible(false);
+      await saveLocalData(storageKey, updatedTarget);
+      setEntryModalVisible(false);
 
-    const earliestYM = targetYM < timelineStartYM ? targetYM : timelineStartYM;
-    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
-    await loadContinuousStream(currentShop.id, timelineStartYM);
+      const earliestYM = targetYM < timelineStartYM ? targetYM : timelineStartYM;
+      await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
+      await loadContinuousStream(currentShop.id, timelineStartYM);
+    } catch (e) {
+      console.log('Failed to save batch debt entries:', e);
+      Alert.alert('ত্রুটি', 'ধারের পণ্য সেভ করা যায়নি।');
+    }
   };
 
   const canConfirmStrictEntryDelete = useMemo(() => {
     if (!pendingDeleteItem || !deleteChecked) return false;
     const typed = deleteTypedConfirm.trim().toLowerCase();
-    const targetDesc = pendingDeleteItem.entry.description.trim().toLowerCase();
-    return typed === 'delete' || (targetDesc.length > 0 && typed === targetDesc);
+    const targetDesc = pendingDeleteItem.entry.description
+      .trim()
+      .toLowerCase();
+    return (
+      typed === 'delete' || (targetDesc.length > 0 && typed === targetDesc)
+    );
   }, [pendingDeleteItem, deleteChecked, deleteTypedConfirm]);
 
   const handleConfirmStrictEntryDelete = async () => {
     if (!pendingDeleteItem || !canConfirmStrictEntryDelete || !currentShop) return;
     const { ym, entry } = pendingDeleteItem;
 
-    const storageKey = getShopMonthStorageKey(currentShop.id, ym);
-    const raw = await AsyncStorage.getItem(storageKey);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<MonthlyDebtRecord>;
-      const filtered = (Array.isArray(parsed.entries) ? parsed.entries : []).filter(
-        (e) => e.id !== entry.id
-      );
+    try {
+      const storageKey = getShopMonthStorageKey(currentShop.id, ym);
+      const raw = await AsyncStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<MonthlyDebtRecord>;
+        const filtered = (
+          Array.isArray(parsed.entries) ? parsed.entries : []
+        ).filter((e) => e.id !== entry.id);
 
-      const updated: MonthlyDebtRecord = {
-        yearMonth: ym,
-        prevMonthCarryover: safeFromCents(safeToCents(parsed.prevMonthCarryover)),
-        paidAmount: safeFromCents(safeToCents(parsed.paidAmount)),
-        entries: filtered,
-        currentMonthDebt: 0,
-        totalBalanceDue: 0,
-        updatedAt: new Date().toISOString(),
-      };
+        const updated: MonthlyDebtRecord = {
+          yearMonth: ym,
+          prevMonthCarryover: safeFromCents(
+            safeToCents(parsed.prevMonthCarryover)
+          ),
+          paidAmount: safeFromCents(safeToCents(parsed.paidAmount)),
+          entries: filtered,
+          currentMonthDebt: 0,
+          totalBalanceDue: 0,
+          updatedAt: new Date().toISOString(),
+        };
 
-      await saveLocalData(storageKey, updated);
+        await saveLocalData(storageKey, updated);
+      }
+
+      setPendingDeleteItem(null);
+      setDeleteChecked(false);
+      setDeleteTypedConfirm('');
+
+      const earliestYM = ym < timelineStartYM ? ym : timelineStartYM;
+      await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
+      await loadContinuousStream(currentShop.id, timelineStartYM);
+    } catch (e) {
+      console.log('Failed to delete debt entry:', e);
+      Alert.alert('ত্রুটি', 'এন্ট্রি ডিলিট করা যায়নি।');
     }
-
-    setPendingDeleteItem(null);
-    setDeleteChecked(false);
-    setDeleteTypedConfirm('');
-
-    const earliestYM = ym < timelineStartYM ? ym : timelineStartYM;
-    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
-    await loadContinuousStream(currentShop.id, timelineStartYM);
   };
 
   const openPaymentEditor = (ym: string, currentPaid: number) => {
@@ -675,29 +765,37 @@ export default function ShopDebtScreen() {
 
   const handleSavePayment = async () => {
     if (!currentShop) return;
-    const paidCents = Math.max(0, safeToCents(paymentInput));
-    const storageKey = getShopMonthStorageKey(currentShop.id, paymentTargetYM);
-    const raw = await AsyncStorage.getItem(storageKey);
-    const parsed: Partial<MonthlyDebtRecord> = raw
-      ? (JSON.parse(raw) as Partial<MonthlyDebtRecord>)
-      : {};
+    try {
+      const paidCents = Math.max(0, safeToCents(paymentInput));
+      const storageKey = getShopMonthStorageKey(currentShop.id, paymentTargetYM);
+      const raw = await AsyncStorage.getItem(storageKey);
+      const parsed: Partial<MonthlyDebtRecord> = raw
+        ? (JSON.parse(raw) as Partial<MonthlyDebtRecord>)
+        : {};
 
-    const updated: MonthlyDebtRecord = {
-      yearMonth: paymentTargetYM,
-      prevMonthCarryover: safeFromCents(safeToCents(parsed.prevMonthCarryover)),
-      paidAmount: safeFromCents(paidCents),
-      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-      currentMonthDebt: 0,
-      totalBalanceDue: 0,
-      updatedAt: new Date().toISOString(),
-    };
+      const updated: MonthlyDebtRecord = {
+        yearMonth: paymentTargetYM,
+        prevMonthCarryover: safeFromCents(
+          safeToCents(parsed.prevMonthCarryover)
+        ),
+        paidAmount: safeFromCents(paidCents),
+        entries: Array.isArray(parsed.entries) ? parsed.entries : [],
+        currentMonthDebt: 0,
+        totalBalanceDue: 0,
+        updatedAt: new Date().toISOString(),
+      };
 
-    await saveLocalData(storageKey, updated);
-    setPaymentModalVisible(false);
+      await saveLocalData(storageKey, updated);
+      setPaymentModalVisible(false);
 
-    const earliestYM = paymentTargetYM < timelineStartYM ? paymentTargetYM : timelineStartYM;
-    await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
-    await loadContinuousStream(currentShop.id, timelineStartYM);
+      const earliestYM =
+        paymentTargetYM < timelineStartYM ? paymentTargetYM : timelineStartYM;
+      await recalculateShopChainFromMonth(currentShop.id, earliestYM, 14);
+      await loadContinuousStream(currentShop.id, timelineStartYM);
+    } catch (e) {
+      console.log('Failed to save shop payment:', e);
+      Alert.alert('ত্রুটি', 'প্রদান সেভ করা যায়নি।');
+    }
   };
 
   const activeMonthBengaliLabel = useMemo(
@@ -706,7 +804,8 @@ export default function ShopDebtScreen() {
   );
 
   const renderMobileMonthCard = (record: MonthlyDebtRecord) => {
-    const jerCents = safeToCents(record.prevMonthCarryover) - safeToCents(record.paidAmount);
+    const jerCents =
+      safeToCents(record.prevMonthCarryover) - safeToCents(record.paidAmount);
     const jerAmount = safeFromCents(jerCents);
     const isActualCurrentMonth = record.yearMonth === getCurrentYearMonth();
 
@@ -722,7 +821,12 @@ export default function ShopDebtScreen() {
           isActualCurrentMonth && styles.currentMonthBorder,
         ]}
       >
-        <View style={[styles.monthBanner, isActualCurrentMonth && styles.currentMonthBanner]}>
+        <View
+          style={[
+            styles.monthBanner,
+            isActualCurrentMonth && styles.currentMonthBanner,
+          ]}
+        >
           <Text style={styles.monthBannerTitle}>
             {formatBengaliYearMonth(record.yearMonth)}
             {isActualCurrentMonth ? ' • বর্তমান' : ''}
@@ -739,7 +843,9 @@ export default function ShopDebtScreen() {
         <View style={styles.summaryTable}>
           <View style={styles.summaryRow}>
             <Text style={styles.summaryKey}>গত মাসের ধার</Text>
-            <Text style={styles.summaryVal}>{formatMoney(record.prevMonthCarryover)}</Text>
+            <Text style={styles.summaryVal}>
+              {formatMoney(record.prevMonthCarryover)}
+            </Text>
           </View>
 
           <TouchableOpacity
@@ -747,7 +853,9 @@ export default function ShopDebtScreen() {
             onPress={() => openPaymentEditor(record.yearMonth, record.paidAmount)}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-              <Text style={[styles.summaryKey, { color: '#15803D' }]}>প্রদান</Text>
+              <Text style={[styles.summaryKey, { color: '#15803D' }]}>
+                প্রদান
+              </Text>
               <Ionicons name="create-outline" size={14} color="#15803D" />
             </View>
             <Text style={[styles.summaryVal, { color: '#15803D' }]}>
@@ -776,20 +884,32 @@ export default function ShopDebtScreen() {
 
           <View style={styles.summaryRow}>
             <Text style={styles.summaryKey}>বর্তমান ধার</Text>
-            <Text style={styles.summaryVal}>{formatMoney(record.currentMonthDebt)}</Text>
+            <Text style={styles.summaryVal}>
+              {formatMoney(record.currentMonthDebt)}
+            </Text>
           </View>
 
           <View style={[styles.summaryRow, styles.grandTotalRow]}>
             <Text style={styles.grandTotalKey}>সর্বমোট বাঁকী</Text>
-            <Text style={styles.grandTotalVal}>{formatMoney(record.totalBalanceDue)}</Text>
+            <Text style={styles.grandTotalVal}>
+              {formatMoney(record.totalBalanceDue)}
+            </Text>
           </View>
         </View>
 
         <View style={styles.detailHeaderRow}>
           <Text style={[styles.detailHeaderCell, { flex: 1.15 }]}>তারিখ</Text>
           <Text style={[styles.detailHeaderCell, { flex: 1.4 }]}>বিবরণ</Text>
-          <Text style={[styles.detailHeaderCell, { flex: 0.95, textAlign: 'center' }]}>Qty & Unit</Text>
-          <Text style={[styles.detailHeaderCell, { flex: 1, textAlign: 'right' }]}>মূল্য</Text>
+          <Text
+            style={[styles.detailHeaderCell, { flex: 0.95, textAlign: 'center' }]}
+          >
+            Qty & Unit
+          </Text>
+          <Text
+            style={[styles.detailHeaderCell, { flex: 1, textAlign: 'right' }]}
+          >
+            মূল্য
+          </Text>
         </View>
 
         <ScrollView style={styles.cardEntriesScroll}>
@@ -800,13 +920,25 @@ export default function ShopDebtScreen() {
           ) : (
             record.entries.map((item) => (
               <View key={item.id} style={styles.detailRow}>
-                <Text style={[styles.detailCell, { flex: 1.15 }]} numberOfLines={1}>
+                <Text
+                  style={[styles.detailCell, { flex: 1.15 }]}
+                  numberOfLines={1}
+                >
                   {item.date}
                 </Text>
-                <Text style={[styles.detailCell, { flex: 1.4, fontWeight: '600' }]} numberOfLines={1}>
+                <Text
+                  style={[styles.detailCell, { flex: 1.4, fontWeight: '600' }]}
+                  numberOfLines={1}
+                >
                   {item.description}
                 </Text>
-                <Text style={[styles.detailCell, { flex: 0.95, textAlign: 'center' }]} numberOfLines={1}>
+                <Text
+                  style={[
+                    styles.detailCell,
+                    { flex: 0.95, textAlign: 'center' },
+                  ]}
+                  numberOfLines={1}
+                >
                   {item.quantity} {item.unit}
                 </Text>
                 <View
@@ -818,7 +950,12 @@ export default function ShopDebtScreen() {
                     gap: 4,
                   }}
                 >
-                  <Text style={[styles.detailCell, { textAlign: 'right', fontWeight: '600' }]}>
+                  <Text
+                    style={[
+                      styles.detailCell,
+                      { textAlign: 'right', fontWeight: '600' },
+                    ]}
+                  >
                     {formatMoney(item.amount)}
                   </Text>
                   <TouchableOpacity
@@ -860,7 +997,10 @@ export default function ShopDebtScreen() {
 
         {shops.length > 0 && (
           <>
-            <TouchableOpacity style={styles.currentMonthBtn} onPress={handleJumpToCurrentMonth}>
+            <TouchableOpacity
+              style={styles.currentMonthBtn}
+              onPress={handleJumpToCurrentMonth}
+            >
               <Text style={styles.currentMonthBtnText}>Current</Text>
             </TouchableOpacity>
 
@@ -877,43 +1017,45 @@ export default function ShopDebtScreen() {
         )}
       </View>
 
-      {/* Shop selector */}
       {shops.length > 0 && (
         <View style={styles.shopSelectorBar}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ gap: 6, alignItems: 'center' }}
-          style={{ flex: 1 }}
-        >
-          {shops.map((shop) => {
-            const active = currentShop?.id === shop.id;
-            return (
-              <TouchableOpacity
-                key={shop.id}
-                style={[styles.shopChip, active && styles.shopChipActive]}
-                onPress={() => {
-                  initialScrollDoneRef.current = false;
-                  setSelectedShopId(shop.id);
-                }}
-              >
-                <Ionicons
-                  name="storefront-outline"
-                  size={14}
-                  color={active ? '#FFFFFF' : '#1E3A8A'}
-                />
-                <Text style={[styles.shopChipText, active && styles.shopChipTextActive]}>
-                  {shop.name}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={{ gap: 6, alignItems: 'center' }}
+            style={{ flex: 1 }}
+          >
+            {shops.map((shop) => {
+              const active = currentShop?.id === shop.id;
+              return (
+                <TouchableOpacity
+                  key={shop.id}
+                  style={[styles.shopChip, active && styles.shopChipActive]}
+                  onPress={() => {
+                    initialScrollDoneRef.current = false;
+                    setSelectedShopId(shop.id);
+                  }}
+                >
+                  <Ionicons
+                    name="storefront-outline"
+                    size={14}
+                    color={active ? '#FFFFFF' : '#1E3A8A'}
+                  />
+                  <Text
+                    style={[
+                      styles.shopChipText,
+                      active && styles.shopChipTextActive,
+                    ]}
+                  >
+                    {shop.name}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         </View>
       )}
 
-      {/* Empty State যখন কোনো দোকান যোগ করা হয়নি */}
       {shopsLoaded && shops.length === 0 ? (
         <View style={styles.emptyShopContainer}>
           <View style={styles.emptyShopIconCircle}>
@@ -928,7 +1070,9 @@ export default function ShopDebtScreen() {
             onPress={() => setAddShopModalVisible(true)}
           >
             <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
-            <Text style={styles.emptyShopPrimaryBtnText}>+ দোকান তৈরি করুন</Text>
+            <Text style={styles.emptyShopPrimaryBtnText}>
+              + দোকান তৈরি করুন
+            </Text>
           </TouchableOpacity>
         </View>
       ) : (
@@ -950,7 +1094,6 @@ export default function ShopDebtScreen() {
         </ScrollView>
       )}
 
-      {/* Add Shop Modal */}
       <Modal visible={addShopModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -971,20 +1114,23 @@ export default function ShopDebtScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setAddShopModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বাতিল
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleCreateNewShop}
+                onPress={() => void handleCreateNewShop()}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>তৈরি করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>
+                  তৈরি করুন
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Strict Delete Entry Modal */}
       <Modal visible={Boolean(pendingDeleteItem)} transparent animationType="fade">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1000,7 +1146,13 @@ export default function ShopDebtScreen() {
               </Text>
               {pendingDeleteItem && (
                 <View style={styles.strictBox}>
-                  <Text style={{ fontWeight: '700', color: '#991B1B', fontSize: 13 }}>
+                  <Text
+                    style={{
+                      fontWeight: '700',
+                      color: '#991B1B',
+                      fontSize: 13,
+                    }}
+                  >
                     পণ্য: {pendingDeleteItem.entry.description}
                   </Text>
                   <Text style={{ color: '#7F1D1D', fontSize: 12 }}>
@@ -1025,7 +1177,7 @@ export default function ShopDebtScreen() {
               </TouchableOpacity>
 
               <Text style={styles.inputLabel}>
-                নিশ্চিত করতে "DELETE" অথবা পণ্যের নাম লিখুন:
+                নিশ্চিত করতে &ldquo;DELETE&rdquo; অথবা পণ্যের নাম লিখুন:
               </Text>
               <TextInput
                 style={styles.modalInput}
@@ -1043,7 +1195,9 @@ export default function ShopDebtScreen() {
                     setDeleteTypedConfirm('');
                   }}
                 >
-                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>
+                    বাতিল
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1051,12 +1205,16 @@ export default function ShopDebtScreen() {
                   style={[
                     styles.modalBtn,
                     {
-                      backgroundColor: canConfirmStrictEntryDelete ? '#DC2626' : '#FCA5A5',
+                      backgroundColor: canConfirmStrictEntryDelete
+                        ? '#DC2626'
+                        : '#FCA5A5',
                     },
                   ]}
-                  onPress={handleConfirmStrictEntryDelete}
+                  onPress={() => void handleConfirmStrictEntryDelete()}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>ডিলিট করুন</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                    ডিলিট করুন
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1064,7 +1222,6 @@ export default function ShopDebtScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Inline Multi-Row Add Modal */}
       <Modal visible={entryModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1075,7 +1232,9 @@ export default function ShopDebtScreen() {
               ধারের পণ্য এন্ট্রি — {currentShop?.name || ''}
             </Text>
 
-            <Text style={styles.inputLabel}>তারিখ (বাম পাশের &lt; চাপলে আগের তারিখ আসবে)</Text>
+            <Text style={styles.inputLabel}>
+              তারিখ (বাম পাশের &lt; চাপলে আগের তারিখ আসবে)
+            </Text>
             <View style={styles.dateRow}>
               <TouchableOpacity
                 style={styles.prevDateBtn}
@@ -1094,10 +1253,27 @@ export default function ShopDebtScreen() {
             </View>
 
             <View style={styles.inlineHeaderRow}>
-              <Text style={[styles.inlineHeaderText, { flex: 1.8 }]}>পণ্যের নাম</Text>
-              <Text style={[styles.inlineHeaderText, { flex: 0.7, textAlign: 'center' }]}>Qty</Text>
-              <Text style={[styles.inlineHeaderText, { flex: 0.95, textAlign: 'center' }]}>Unit</Text>
-              <Text style={[styles.inlineHeaderText, { flex: 0.95, textAlign: 'right' }]}>Price</Text>
+              <Text style={[styles.inlineHeaderText, { flex: 1.8 }]}>
+                পণ্যের নাম
+              </Text>
+              <Text
+                style={[styles.inlineHeaderText, { flex: 0.7, textAlign: 'center' }]}
+              >
+                Qty
+              </Text>
+              <Text
+                style={[
+                  styles.inlineHeaderText,
+                  { flex: 0.95, textAlign: 'center' },
+                ]}
+              >
+                Unit
+              </Text>
+              <Text
+                style={[styles.inlineHeaderText, { flex: 0.95, textAlign: 'right' }]}
+              >
+                Price
+              </Text>
               <View style={{ width: 32 }} />
             </View>
 
@@ -1106,7 +1282,8 @@ export default function ShopDebtScreen() {
               keyboardShouldPersistTaps="handled"
             >
               {draftItems.map((draft, index) => {
-                const qNum = parseFloat(draft.quantityText.replace(/[^0-9.]/g, '')) || 0;
+                const qNum =
+                  parseFloat(draft.quantityText.replace(/[^0-9.]/g, '')) || 0;
                 const rowAmt = safeFromCents(
                   qNum > 0 && safeToCents(draft.unitPriceText) > 0
                     ? Math.round(qNum * safeToCents(draft.unitPriceText))
@@ -1117,7 +1294,9 @@ export default function ShopDebtScreen() {
                 const suggestions =
                   activeSuggestionRow === index
                     ? catalog
-                        .filter((c) => (!query ? true : c.name.toLowerCase().includes(query)))
+                        .filter((c) =>
+                          !query ? true : c.name.toLowerCase().includes(query)
+                        )
                         .slice(0, 6)
                     : [];
 
@@ -1140,32 +1319,51 @@ export default function ShopDebtScreen() {
                       />
 
                       <TextInput
-                        style={[styles.inlineInput, { flex: 0.7, textAlign: 'center' }]}
+                        style={[
+                          styles.inlineInput,
+                          { flex: 0.7, textAlign: 'center' },
+                        ]}
                         keyboardType="numeric"
                         placeholder="1"
                         value={draft.quantityText}
-                        onChangeText={(txt) => handleUpdateDraftField(index, 'quantityText', txt)}
+                        onChangeText={(txt) =>
+                          handleUpdateDraftField(index, 'quantityText', txt)
+                        }
                       />
 
                       <TouchableOpacity
                         style={[styles.unitDropdownBtn, { flex: 0.95 }]}
                         onPress={() => {
                           setActiveSuggestionRow(null);
-                          setActiveDropdownRow((prev) => (prev === index ? null : index));
+                          setActiveDropdownRow((prev) =>
+                            prev === index ? null : index
+                          );
                         }}
                       >
-                        <Text style={styles.unitDropdownBtnText} numberOfLines={1}>
+                        <Text
+                          style={styles.unitDropdownBtnText}
+                          numberOfLines={1}
+                        >
                           {draft.unit}
                         </Text>
-                        <Ionicons name="chevron-down" size={13} color="#1E293B" />
+                        <Ionicons
+                          name="chevron-down"
+                          size={13}
+                          color="#1E293B"
+                        />
                       </TouchableOpacity>
 
                       <TextInput
-                        style={[styles.inlineInput, { flex: 0.95, textAlign: 'right' }]}
+                        style={[
+                          styles.inlineInput,
+                          { flex: 0.95, textAlign: 'right' },
+                        ]}
                         keyboardType="numeric"
                         placeholder="0.00"
                         value={draft.unitPriceText}
-                        onChangeText={(txt) => handleUpdateDraftField(index, 'unitPriceText', txt)}
+                        onChangeText={(txt) =>
+                          handleUpdateDraftField(index, 'unitPriceText', txt)
+                        }
                       />
 
                       <TouchableOpacity
@@ -1179,7 +1377,9 @@ export default function ShopDebtScreen() {
 
                     {activeDropdownRow === index && (
                       <View style={styles.dropdownMenuBox}>
-                        <Text style={styles.dropdownHintText}>বেশি ব্যবহৃত Unit সবার আগে:</Text>
+                        <Text style={styles.dropdownHintText}>
+                          বেশি ব্যবহৃত Unit সবার আগে:
+                        </Text>
                         <View style={styles.dropdownChipsWrap}>
                           {sortedUnits.map((u) => {
                             const selected = draft.unit === u;
@@ -1190,7 +1390,9 @@ export default function ShopDebtScreen() {
                                   styles.dropdownOptionChip,
                                   selected && styles.dropdownOptionChipActive,
                                 ]}
-                                onPress={() => handleSelectUnitFromDropdown(index, u)}
+                                onPress={() =>
+                                  void handleSelectUnitFromDropdown(index, u)
+                                }
                               >
                                 <Text
                                   style={[
@@ -1214,15 +1416,22 @@ export default function ShopDebtScreen() {
                             key={prod.id}
                             activeOpacity={0.65}
                             style={styles.suggestionItem}
-                            onPress={() => handleApplyCatalogSuggestion(index, prod)}
+                            onPress={() =>
+                              handleApplyCatalogSuggestion(index, prod)
+                            }
                           >
-                            <View pointerEvents="none" style={{ flex: 1, paddingRight: 8 }}>
-                              <Text style={styles.suggestionName}>{prod.name}</Text>
+                            <View
+                              pointerEvents="none"
+                              style={{ flex: 1, paddingRight: 8 }}
+                            >
+                              <Text style={styles.suggestionName}>
+                                {prod.name}
+                              </Text>
                             </View>
                             <View pointerEvents="none">
                               <Text style={styles.suggestionMeta}>
-                                {formatMoney(prod.defaultUnitPrice)} / {prod.defaultQuantity}{' '}
-                                {prod.defaultUnit}
+                                {formatMoney(prod.defaultUnitPrice)} /{' '}
+                                {prod.defaultQuantity} {prod.defaultUnit}
                               </Text>
                             </View>
                           </TouchableOpacity>
@@ -1232,13 +1441,19 @@ export default function ShopDebtScreen() {
 
                     <View style={styles.rowFooterMeta}>
                       {draftItems.length > 1 ? (
-                        <TouchableOpacity onPress={() => handleRemoveDraftRow(index)}>
-                          <Text style={styles.removeRowLink}>এই লাইন বাদ দিন</Text>
+                        <TouchableOpacity
+                          onPress={() => handleRemoveDraftRow(index)}
+                        >
+                          <Text style={styles.removeRowLink}>
+                            এই লাইন বাদ দিন
+                          </Text>
                         </TouchableOpacity>
                       ) : (
                         <View />
                       )}
-                      <Text style={styles.rowSubTotal}>মোট: {formatMoney(rowAmt)} Tk.</Text>
+                      <Text style={styles.rowSubTotal}>
+                        মোট: {formatMoney(rowAmt)} Tk.
+                      </Text>
                     </View>
                   </View>
                 );
@@ -1246,7 +1461,8 @@ export default function ShopDebtScreen() {
             </ScrollView>
 
             <Text style={styles.previewTotalText}>
-              সব পণ্যের সর্বমোট মূল্য: {formatMoney(safeFromCents(draftGrandTotalCents))} Tk.
+              সব পণ্যের সর্বমোট মূল্য:{' '}
+              {formatMoney(safeFromCents(draftGrandTotalCents))} Tk.
             </Text>
 
             <View style={styles.modalButtons}>
@@ -1254,20 +1470,23 @@ export default function ShopDebtScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setEntryModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বাতিল
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleSaveBatchEntries}
+                onPress={() => void handleSaveBatchEntries()}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>সেভ করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>
+                  সেভ করুন
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Payment Edit Modal */}
       <Modal visible={paymentModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1291,13 +1510,17 @@ export default function ShopDebtScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setPaymentModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বাতিল
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
-                onPress={handleSavePayment}
+                onPress={() => void handleSavePayment()}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>প্রদান সেভ করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>
+                  প্রদান সেভ করুন
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

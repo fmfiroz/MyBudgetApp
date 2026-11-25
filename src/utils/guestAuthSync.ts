@@ -1,9 +1,9 @@
-
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { auth } from '../firebase';
 import {
   getPendingLocalChangesForUser,
   startFirebaseSync,
+  stopFirebaseSync,
 } from './firebaseSync';
 
 export type SessionMode = 'guest' | 'registered' | null;
@@ -20,6 +20,7 @@ const SESSION_STORAGE_KEY = '@mybudget_auth_session_v1';
 const PENDING_MIGRATION_KEY = '@mybudget_pending_guest_migration_v1';
 const LOCAL_DATA_OWNER_KEY = '@mybudget_local_data_owner_v1';
 const LOCAL_ACCOUNT_SNAPSHOT_PREFIX = '@mybudget_local_account_v1_';
+const GUEST_DATA_SNAPSHOT_KEY = '@mybudget_guest_snapshot_v1';
 const UNASSIGNED_LEGACY_DATA_KEY = '@mybudget_legacy_unassigned_v1';
 
 export type ConfirmLegacyDataImport = (dataGroupCount: number) => Promise<boolean>;
@@ -140,6 +141,26 @@ async function getLocalAccountSnapshot(
   }
 }
 
+async function saveGuestSnapshot(snapshot: Record<string, unknown>): Promise<void> {
+  if (Object.keys(snapshot).length === 0) return;
+  await AsyncStorage.setItem(GUEST_DATA_SNAPSHOT_KEY, JSON.stringify(snapshot));
+}
+
+async function getGuestSnapshot(): Promise<Record<string, unknown>> {
+  const raw = await AsyncStorage.getItem(GUEST_DATA_SNAPSHOT_KEY);
+  if (!raw) return {};
+
+  try {
+    const snapshot = JSON.parse(raw) as Record<string, unknown>;
+    if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) {
+      return {};
+    }
+    return snapshot;
+  } catch {
+    return {};
+  }
+}
+
 async function readUnassignedLegacyData(): Promise<Record<string, unknown>> {
   const raw = await AsyncStorage.getItem(UNASSIGNED_LEGACY_DATA_KEY);
   if (!raw) return {};
@@ -194,6 +215,8 @@ async function claimUnassignedLegacyData(
 export async function startGuestSession(
   confirmLegacyDataImport?: ConfirmLegacyDataImport
 ): Promise<AuthSessionState> {
+  stopFirebaseSync();
+
   const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
 
   if (currentOwner && currentOwner !== 'guest') {
@@ -213,6 +236,12 @@ export async function startGuestSession(
     existing.mode === 'guest' && existing.userId
       ? existing.userId
       : `guest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  // আগে থেকে সেভ করা Guest ডেটা থাকলে লোকাল স্টোরেজে ফিরিয়ে আনা
+  const savedGuestData = await getGuestSnapshot();
+  if (Object.keys(savedGuestData).length > 0) {
+    await hydrateLocalDataFromCloud(savedGuestData);
+  }
 
   const importedCount = await claimUnassignedLegacyData(
     guestId,
@@ -236,6 +265,18 @@ export async function startGuestSession(
   ]);
 
   return nextState;
+}
+
+export async function exitGuestSession(): Promise<void> {
+  const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
+
+  if (currentOwner === 'guest') {
+    const guestData = await collectAllLocalAppData();
+    await saveGuestSnapshot(guestData);
+  }
+
+  await clearAllLocalUserFinanceData();
+  await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
 export async function setRegisteredSession(params: {
@@ -327,19 +368,22 @@ function assertCurrentInitialization(userId: string, generation: number): void {
   }
 }
 
-async function initializeUserAccount(params: {
-  userId: string;
-  email?: string | null;
-  displayName?: string | null;
-  confirmLegacyDataImport?: ConfirmLegacyDataImport;
-  fetchCloudDataFn?: (
-    userId: string
-  ) => Promise<Record<string, unknown> | null>;
-  saveCloudDataFn?: (
-    userId: string,
-    data: Record<string, unknown>
-  ) => Promise<void>;
-}, generation: number): Promise<{
+async function initializeUserAccount(
+  params: {
+    userId: string;
+    email?: string | null;
+    displayName?: string | null;
+    confirmLegacyDataImport?: ConfirmLegacyDataImport;
+    fetchCloudDataFn?: (
+      userId: string
+    ) => Promise<Record<string, unknown> | null>;
+    saveCloudDataFn?: (
+      userId: string,
+      data: Record<string, unknown>
+    ) => Promise<void>;
+  },
+  generation: number
+): Promise<{
   hydratedCount: number;
   syncedGuestCount: number;
   clearedOtherUser: boolean;
@@ -361,13 +405,25 @@ async function initializeUserAccount(params: {
     assertCurrentInitialization(params.userId, generation);
   }
 
-  const [guestSnapshot, accountSnapshot] = await Promise.all([
-    currentOwner === 'guest' ? collectAllLocalAppData() : Promise.resolve({}),
-    !currentOwner
-      ? quarantineUnownedLocalData()
-      : Promise.resolve({}),
-  ]);
+  const [activeGuestData, savedGuestSnapshot, accountSnapshot] =
+    await Promise.all([
+      currentOwner === 'guest'
+        ? collectAllLocalAppData()
+        : Promise.resolve({}),
+      getGuestSnapshot(),
+      !currentOwner ? quarantineUnownedLocalData() : Promise.resolve({}),
+    ]);
   assertCurrentInitialization(params.userId, generation);
+
+  const guestSnapshot = {
+    ...savedGuestSnapshot,
+    ...activeGuestData,
+  };
+
+  if (currentOwner === 'guest' && Object.keys(guestSnapshot).length > 0) {
+    await saveGuestSnapshot(guestSnapshot);
+    assertCurrentInitialization(params.userId, generation);
+  }
 
   if (!currentOwner && Object.keys(accountSnapshot).length > 0) {
     await clearAllLocalUserFinanceData();
@@ -391,15 +447,13 @@ async function initializeUserAccount(params: {
 
   const cloudHasData = Boolean(cloudData && Object.keys(cloudData).length > 0);
   const activeUserSnapshot =
-    currentOwner === params.userId
-      ? await collectAllLocalAppData()
-      : {};
+    currentOwner === params.userId ? await collectAllLocalAppData() : {};
   assertCurrentInitialization(params.userId, generation);
 
   const localFallback = {
     ...userAccountSnapshot,
     ...activeUserSnapshot,
-    ...(!cloudHasData && currentOwner === 'guest' ? guestSnapshot : {}),
+    ...(currentOwner === 'guest' ? guestSnapshot : {}),
   };
 
   const restoredData = {
@@ -432,6 +486,11 @@ async function initializeUserAccount(params: {
   assertCurrentInitialization(params.userId, generation);
   const syncedGuestCount =
     currentOwner === 'guest' ? Object.keys(guestSnapshot).length : 0;
+
+  if (currentOwner === 'guest' && syncedGuestCount > 0) {
+    await AsyncStorage.removeItem(GUEST_DATA_SNAPSHOT_KEY);
+  }
+
   await setRegisteredSession({
     userId: params.userId,
     email: params.email,

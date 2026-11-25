@@ -33,6 +33,7 @@ interface LoanRepaymentRecord {
   date: string;
   amount: number;
   note?: string;
+  createdAt?: number;
 }
 
 interface WelfareLoanItem {
@@ -49,6 +50,15 @@ interface WelfareStoreData {
   incomes: WelfareCashFlowItem[];
   expenses: WelfareCashFlowItem[];
   loans: WelfareLoanItem[];
+}
+
+interface BudgetAllocationRow {
+  id: string;
+  ym: string;
+  dateLabel: string;
+  sortTimestamp: number;
+  label: string;
+  amount: number;
 }
 
 type StrictDeleteTarget =
@@ -116,6 +126,34 @@ const MONTH_NAME_TO_NUM: Record<string, string> = {
   December: '12',
 };
 
+function parseDDMMYYYYToTimestamp(dateStr: string | undefined): number {
+  if (!dateStr) return 0;
+  const parts = dateStr.trim().split('/');
+  if (parts.length !== 3) return 0;
+  const day = Number(parts[0]);
+  const month = Number(parts[1]) - 1;
+  const year = Number(parts[2]);
+  if (!Number.isInteger(day) || !Number.isInteger(month) || !Number.isInteger(year)) {
+    return 0;
+  }
+  const dt = new Date(year, month, day);
+  if (dt.getFullYear() !== year || dt.getMonth() !== month || dt.getDate() !== day) {
+    return 0;
+  }
+  return Date.UTC(year, month, day);
+}
+
+function compareByDateDesc<T extends { date?: string; dateGiven?: string; createdAt?: number }>(
+  a: T,
+  b: T,
+  field: 'date' | 'dateGiven' = 'date'
+): number {
+  const ta = parseDDMMYYYYToTimestamp(field === 'dateGiven' ? a.dateGiven : a.date);
+  const tb = parseDDMMYYYYToTimestamp(field === 'dateGiven' ? b.dateGiven : b.date);
+  if (tb !== ta) return tb - ta;
+  return (b.createdAt || 0) - (a.createdAt || 0);
+}
+
 function safeToCents(val: unknown): number {
   if (typeof val === 'number') {
     return Number.isFinite(val) ? Math.round(val * 100) : 0;
@@ -161,22 +199,29 @@ function getYearMonthForFiscalMonth(month: string, startYear: number): string {
   return `${calYear}-${mm}`;
 }
 
-async function getBudgetWelfareAllocations(startYear: number): Promise<
-  { id: string; label: string; amount: number }[]
-> {
-  const results: { id: string; label: string; amount: number }[] = [];
+async function getBudgetWelfareAllocations(
+  startYear: number
+): Promise<BudgetAllocationRow[]> {
+  const results: BudgetAllocationRow[] = [];
   for (const month of FISCAL_MONTHS) {
     const ym = getYearMonthForFiscalMonth(month, startYear);
     try {
       const raw = await AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`);
       if (!raw) continue;
-      const parsed = JSON.parse(raw) as { rowAmounts?: { [rowId: string]: number } };
+      const parsed = JSON.parse(raw) as {
+        rowAmounts?: { [rowId: string]: number };
+      };
       const amtCents = safeToCents(parsed?.rowAmounts?.[WELFARE_ROW_ID]);
       if (amtCents > 0) {
-        const calYr = ym.slice(0, 4);
+        const [yrStr, moStr] = ym.split('-');
+        const yr = Number(yrStr) || startYear;
+        const mo = Number(moStr) || 1;
         results.push({
           id: `budget-alloc-${ym}`,
-          label: `Budget Allocation (${month} ${calYr})`,
+          ym,
+          dateLabel: `01/${String(mo).padStart(2, '0')}/${yr}`,
+          sortTimestamp: Date.UTC(yr, mo - 1, 1),
+          label: `${month} ${yr}`,
           amount: safeFromCents(amtCents),
         });
       }
@@ -184,6 +229,7 @@ async function getBudgetWelfareAllocations(startYear: number): Promise<
       // ignore single month error
     }
   }
+  results.sort((a, b) => b.sortTimestamp - a.sortTimestamp);
   return results;
 }
 
@@ -196,9 +242,8 @@ export default function WelfareScreen() {
     expenses: [],
     loans: [],
   });
-  const [budgetAllocations, setBudgetAllocations] = useState<
-    { id: string; label: string; amount: number }[]
-  >([]);
+  const [budgetAllocations, setBudgetAllocations] = useState<BudgetAllocationRow[]>([]);
+  const [expandedLoanIds, setExpandedLoanIds] = useState<Record<string, boolean>>({});
 
   // Add Income / Expense Modal
   const [cashFlowModalVisible, setCashFlowModalVisible] = useState<boolean>(false);
@@ -221,8 +266,9 @@ export default function WelfareScreen() {
   const [repayAmount, setRepayAmount] = useState<string>('');
   const [repayNote, setRepayNote] = useState<string>('');
 
-  // Strict Delete Modal States (সব ধরনের ডিলিটের জন্য কঠিন যাচাই)
-  const [strictDeleteTarget, setStrictDeleteTarget] = useState<StrictDeleteTarget | null>(null);
+  // Strict Delete Modal States
+  const [strictDeleteTarget, setStrictDeleteTarget] =
+    useState<StrictDeleteTarget | null>(null);
   const [strictDeleteChecked, setStrictDeleteChecked] = useState<boolean>(false);
   const [strictDeleteTyped, setStrictDeleteTyped] = useState<string>('');
 
@@ -251,7 +297,7 @@ export default function WelfareScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadWelfareData();
+      void loadWelfareData();
     }, [loadWelfareData])
   );
 
@@ -263,6 +309,34 @@ export default function WelfareScreen() {
       console.log('Failed to save welfare data:', e);
     }
   }, []);
+
+  const toggleLoanRepaymentsExpand = useCallback((loanId: string) => {
+    setExpandedLoanIds((prev) => ({
+      ...prev,
+      [loanId]: !prev[loanId],
+    }));
+  }, []);
+
+  const sortedIncomes = useMemo(
+    () => [...store.incomes].sort((a, b) => compareByDateDesc(a, b, 'date')),
+    [store.incomes]
+  );
+
+  const sortedExpenses = useMemo(
+    () => [...store.expenses].sort((a, b) => compareByDateDesc(a, b, 'date')),
+    [store.expenses]
+  );
+
+  const sortedLoans = useMemo(() => {
+    return [...store.loans]
+      .sort((a, b) => compareByDateDesc(a, b, 'dateGiven'))
+      .map((loan) => ({
+        ...loan,
+        repayments: [...(loan.repayments || [])].sort((a, b) =>
+          compareByDateDesc(a, b, 'date')
+        ),
+      }));
+  }, [store.loans]);
 
   const openStrictDeleteDialog = (target: StrictDeleteTarget) => {
     setStrictDeleteTarget(target);
@@ -441,6 +515,7 @@ export default function WelfareScreen() {
       date: repayDate.trim() || getTodayDDMMYYYY(),
       amount: safeFromCents(amtCents),
       note: repayNote.trim() || undefined,
+      createdAt: Date.now(),
     };
 
     const nextLoans = store.loans.map((l) => {
@@ -456,6 +531,10 @@ export default function WelfareScreen() {
       loans: nextLoans,
     });
 
+    setExpandedLoanIds((prev) => ({
+      ...prev,
+      [repayTargetLoan.id]: true,
+    }));
     setRepayTargetLoan(null);
   };
 
@@ -514,7 +593,7 @@ export default function WelfareScreen() {
         <View style={{ flex: 1 }}>
           <Text style={styles.headerTitle}>Welfare Fund</Text>
           <Text style={styles.headerSub} numberOfLines={1}>
-            Budget Allocation, Income, Expense & Loan Ledger
+            Budget Allocation, Income, Expense &amp; Loan Ledger
           </Text>
         </View>
       </View>
@@ -545,7 +624,8 @@ export default function WelfareScreen() {
             {formatMoney(summary.totalLoanDue)} Tk.
           </Text>
           <Text style={styles.summaryTiny}>
-            দেওয়া: {formatMoney(summary.totalLoanGiven)} • ফেরত: {formatMoney(summary.totalLoanReturned)}
+            দেওয়া: {formatMoney(summary.totalLoanGiven)} • ফেরত:{' '}
+            {formatMoney(summary.totalLoanReturned)}
           </Text>
         </View>
 
@@ -604,6 +684,7 @@ export default function WelfareScreen() {
               <Text style={styles.primaryActionText}>+ নতুন Welfare আয় যোগ করুন</Text>
             </TouchableOpacity>
 
+            {/* Budget Allocation Table */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>
                 Budget থেকে আসা Welfare বরাদ্দ ({formatMoney(summary.budgetAlloc)} Tk.)
@@ -613,56 +694,126 @@ export default function WelfareScreen() {
                   Budget পেজের Welfare Fund খাতে কোনো মাসিক বরাদ্দ দেওয়া হয়নি।
                 </Text>
               ) : (
-                budgetAllocations.map((alloc) => (
-                  <View key={alloc.id} style={styles.listRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.itemTitle}>{alloc.label}</Text>
-                      <Text style={styles.itemSub}>Budget Sheet Sync</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  <View style={styles.tableBox}>
+                    <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                      <Text style={[styles.tableCell, styles.colDate, styles.tableHeaderText]}>
+                        তারিখ
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colMonth, styles.tableHeaderText]}>
+                        মাস
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colAmount, styles.tableHeaderText]}>
+                        বরাদ্দ (Tk.)
+                      </Text>
                     </View>
-                    <Text style={[styles.itemAmount, { color: '#1D4ED8' }]}>
-                      +{formatMoney(alloc.amount)} Tk.
-                    </Text>
+                    {budgetAllocations.map((alloc, idx) => (
+                      <View
+                        key={alloc.id}
+                        style={[
+                          styles.tableRow,
+                          idx % 2 === 1 && styles.tableZebraRow,
+                        ]}
+                      >
+                        <Text style={[styles.tableCell, styles.colDate, styles.tableCellText]}>
+                          {alloc.dateLabel}
+                        </Text>
+                        <Text style={[styles.tableCell, styles.colMonth, styles.tableCellBold]}>
+                          {alloc.label}
+                        </Text>
+                        <Text
+                          style={[
+                            styles.tableCell,
+                            styles.colAmount,
+                            styles.tableCellNum,
+                            { color: '#1D4ED8' },
+                          ]}
+                        >
+                          +{formatMoney(alloc.amount)}
+                        </Text>
+                      </View>
+                    ))}
                   </View>
-                ))
+                </ScrollView>
               )}
             </View>
 
+            {/* Direct Income Table */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>
-                Welfare আয়ের তালিকা ({store.incomes.length})
+                Welfare আয়ের তালিকা ({sortedIncomes.length})
               </Text>
-              {store.incomes.length === 0 ? (
+              {sortedIncomes.length === 0 ? (
                 <Text style={styles.emptyHint}>কোনো অতিরিক্ত Welfare আয় যোগ করা হয়নি।</Text>
               ) : (
-                store.incomes.map((inc) => (
-                  <View key={inc.id} style={styles.listRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.itemTitle}>{inc.sourceOrTarget}</Text>
-                      <Text style={styles.itemSub}>
-                        তারিখ: {inc.date}
-                        {inc.note ? ` • ${inc.note}` : ''}
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  <View style={styles.tableBox}>
+                    <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                      <Text style={[styles.tableCell, styles.colDate, styles.tableHeaderText]}>
+                        তারিখ
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colParty, styles.tableHeaderText]}>
+                        উৎস / বিবরণ
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colAmount, styles.tableHeaderText]}>
+                        টাকা (Tk.)
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colActionSmall, styles.tableHeaderText]}>
+                        মুছুন
                       </Text>
                     </View>
-                    <Text style={[styles.itemAmount, { color: '#15803D' }]}>
-                      +{formatMoney(inc.amount)} Tk.
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() =>
-                        openStrictDeleteDialog({
-                          kind: 'income',
-                          id: inc.id,
-                          title: inc.sourceOrTarget,
-                          subtitle: `তারিখ: ${inc.date}`,
-                          amount: inc.amount,
-                        })
-                      }
-                      style={styles.deleteBtnSmall}
-                      accessibilityLabel="Delete Welfare Income"
-                    >
-                      <Ionicons name="trash-outline" size={16} color="#DC2626" />
-                    </TouchableOpacity>
+                    {sortedIncomes.map((inc, idx) => (
+                      <View
+                        key={inc.id}
+                        style={[
+                          styles.tableRow,
+                          idx % 2 === 1 && styles.tableZebraRow,
+                        ]}
+                      >
+                        <Text style={[styles.tableCell, styles.colDate, styles.tableCellText]}>
+                          {inc.date}
+                        </Text>
+                        <View style={[styles.tableCell, styles.colParty]}>
+                          <Text style={styles.tableCellBold} numberOfLines={1}>
+                            {inc.sourceOrTarget}
+                          </Text>
+                          {inc.note ? (
+                            <Text style={styles.tableSubText} numberOfLines={1}>
+                              {inc.note}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <Text
+                          style={[
+                            styles.tableCell,
+                            styles.colAmount,
+                            styles.tableCellNum,
+                            { color: '#15803D' },
+                          ]}
+                        >
+                          +{formatMoney(inc.amount)}
+                        </Text>
+                        <View style={[styles.tableCell, styles.colActionSmall, styles.centerCell]}>
+                          <TouchableOpacity
+                            onPress={() =>
+                              openStrictDeleteDialog({
+                                kind: 'income',
+                                id: inc.id,
+                                title: inc.sourceOrTarget,
+                                subtitle: `তারিখ: ${inc.date}`,
+                                amount: inc.amount,
+                              })
+                            }
+                            style={styles.deleteBtnSmall}
+                            accessibilityLabel="Delete Welfare Income"
+                          >
+                            <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
                   </View>
-                ))
+                </ScrollView>
               )}
             </View>
           </>
@@ -678,42 +829,82 @@ export default function WelfareScreen() {
               <Text style={styles.primaryActionText}>+ নতুন Welfare খরচ যোগ করুন</Text>
             </TouchableOpacity>
 
+            {/* Expense Table */}
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>
-                Welfare খরচের তালিকা ({store.expenses.length})
+                Welfare খরচের তালিকা ({sortedExpenses.length})
               </Text>
-              {store.expenses.length === 0 ? (
+              {sortedExpenses.length === 0 ? (
                 <Text style={styles.emptyHint}>কোনো খরচের রেকর্ড নেই।</Text>
               ) : (
-                store.expenses.map((exp) => (
-                  <View key={exp.id} style={styles.listRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.itemTitle}>{exp.sourceOrTarget}</Text>
-                      <Text style={styles.itemSub}>
-                        তারিখ: {exp.date}
-                        {exp.note ? ` • ${exp.note}` : ''}
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  <View style={styles.tableBox}>
+                    <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                      <Text style={[styles.tableCell, styles.colDate, styles.tableHeaderText]}>
+                        তারিখ
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colParty, styles.tableHeaderText]}>
+                        খাতের বিবরণ
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colAmount, styles.tableHeaderText]}>
+                        টাকা (Tk.)
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colActionSmall, styles.tableHeaderText]}>
+                        মুছুন
                       </Text>
                     </View>
-                    <Text style={[styles.itemAmount, { color: '#B91C1C' }]}>
-                      -{formatMoney(exp.amount)} Tk.
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() =>
-                        openStrictDeleteDialog({
-                          kind: 'expense',
-                          id: exp.id,
-                          title: exp.sourceOrTarget,
-                          subtitle: `তারিখ: ${exp.date}`,
-                          amount: exp.amount,
-                        })
-                      }
-                      style={styles.deleteBtnSmall}
-                      accessibilityLabel="Delete Welfare Expense"
-                    >
-                      <Ionicons name="trash-outline" size={16} color="#DC2626" />
-                    </TouchableOpacity>
+                    {sortedExpenses.map((exp, idx) => (
+                      <View
+                        key={exp.id}
+                        style={[
+                          styles.tableRow,
+                          idx % 2 === 1 && styles.tableZebraRow,
+                        ]}
+                      >
+                        <Text style={[styles.tableCell, styles.colDate, styles.tableCellText]}>
+                          {exp.date}
+                        </Text>
+                        <View style={[styles.tableCell, styles.colParty]}>
+                          <Text style={styles.tableCellBold} numberOfLines={1}>
+                            {exp.sourceOrTarget}
+                          </Text>
+                          {exp.note ? (
+                            <Text style={styles.tableSubText} numberOfLines={1}>
+                              {exp.note}
+                            </Text>
+                          ) : null}
+                        </View>
+                        <Text
+                          style={[
+                            styles.tableCell,
+                            styles.colAmount,
+                            styles.tableCellNum,
+                            { color: '#B91C1C' },
+                          ]}
+                        >
+                          -{formatMoney(exp.amount)}
+                        </Text>
+                        <View style={[styles.tableCell, styles.colActionSmall, styles.centerCell]}>
+                          <TouchableOpacity
+                            onPress={() =>
+                              openStrictDeleteDialog({
+                                kind: 'expense',
+                                id: exp.id,
+                                title: exp.sourceOrTarget,
+                                subtitle: `তারিখ: ${exp.date}`,
+                                amount: exp.amount,
+                              })
+                            }
+                            style={styles.deleteBtnSmall}
+                            accessibilityLabel="Delete Welfare Expense"
+                          >
+                            <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    ))}
                   </View>
-                ))
+                </ScrollView>
               )}
             </View>
           </>
@@ -744,122 +935,220 @@ export default function WelfareScreen() {
               <Text style={styles.primaryActionText}>+ নতুন ধার দিন (Give Loan)</Text>
             </TouchableOpacity>
 
-            {store.loans.length === 0 ? (
-              <View style={styles.sectionCard}>
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>
+                ধার দেওয়ার তালিকা ({sortedLoans.length})
+              </Text>
+              {sortedLoans.length === 0 ? (
                 <Text style={styles.emptyHint}>Welfare ফান্ড থেকে কাউকে ধার দেওয়া হয়নি।</Text>
-              </View>
-            ) : (
-              store.loans.map((loan) => {
-                const givenCents = safeToCents(loan.amountGiven);
-                const returnedCents = (loan.repayments || []).reduce(
-                  (s, r) => s + safeToCents(r.amount),
-                  0
-                );
-                const dueCents = Math.max(0, givenCents - returnedCents);
-                const dueVal = safeFromCents(dueCents);
-                const returnedVal = safeFromCents(returnedCents);
-
-                return (
-                  <View key={loan.id} style={styles.loanCard}>
-                    <View style={styles.loanCardHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.loanBorrowerName}>{loan.borrowerName}</Text>
-                        <Text style={styles.itemSub}>
-                          ধার দেওয়ার তারিখ: {loan.dateGiven}
-                          {loan.note ? ` • ${loan.note}` : ''}
-                        </Text>
-                      </View>
-                      <TouchableOpacity
-                        onPress={() =>
-                          openStrictDeleteDialog({
-                            kind: 'loan',
-                            id: loan.id,
-                            title: loan.borrowerName,
-                            subtitle: `ধার: ${formatMoney(loan.amountGiven)} Tk. • বাকি: ${formatMoney(dueVal)} Tk.`,
-                            amount: loan.amountGiven,
-                          })
-                        }
-                        style={styles.deleteBtnSmall}
-                        accessibilityLabel="Delete Loan Record"
-                      >
-                        <Ionicons name="trash-outline" size={16} color="#DC2626" />
-                      </TouchableOpacity>
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={true}>
+                  <View style={styles.tableBox}>
+                    {/* Loan Table Header */}
+                    <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                      <Text style={[styles.tableCell, styles.colDate, styles.tableHeaderText]}>
+                        তারিখ
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colBorrower, styles.tableHeaderText]}>
+                        গ্রহীতা
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colLoanNum, styles.tableHeaderText]}>
+                        ধার (Tk.)
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colLoanNum, styles.tableHeaderText]}>
+                        ফেরত (Tk.)
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colLoanNum, styles.tableHeaderText]}>
+                        বাকি (Tk.)
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colRepayAction, styles.tableHeaderText]}>
+                        ফেরত
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colArrow, styles.tableHeaderText]}>
+                        তালিকা
+                      </Text>
+                      <Text style={[styles.tableCell, styles.colActionSmall, styles.tableHeaderText]}>
+                        মুছুন
+                      </Text>
                     </View>
 
-                    <View style={styles.loanMetricsRow}>
-                      <View style={styles.loanMetricBox}>
-                        <Text style={styles.loanMetricLabel}>ধার দেওয়া হয়েছে</Text>
-                        <Text style={styles.loanMetricVal}>
-                          {formatMoney(loan.amountGiven)} Tk.
-                        </Text>
-                      </View>
-                      <View style={styles.loanMetricBox}>
-                        <Text style={styles.loanMetricLabel}>ফেরত পাওয়া গেছে</Text>
-                        <Text style={[styles.loanMetricVal, { color: '#15803D' }]}>
-                          {formatMoney(returnedVal)} Tk.
-                        </Text>
-                      </View>
-                      <View style={styles.loanMetricBox}>
-                        <Text style={styles.loanMetricLabel}>ফেরত দিতে বাকি</Text>
-                        <Text
-                          style={[
-                            styles.loanMetricVal,
-                            { color: dueVal > 0 ? '#B91C1C' : '#15803D' },
-                          ]}
-                        >
-                          {dueVal > 0 ? `${formatMoney(dueVal)} Tk.` : 'পরিশোধিত'}
-                        </Text>
-                      </View>
-                    </View>
+                    {sortedLoans.map((loan, idx) => {
+                      const givenCents = safeToCents(loan.amountGiven);
+                      const returnedCents = (loan.repayments || []).reduce(
+                        (s, r) => s + safeToCents(r.amount),
+                        0
+                      );
+                      const dueCents = Math.max(0, givenCents - returnedCents);
+                      const dueVal = safeFromCents(dueCents);
+                      const returnedVal = safeFromCents(returnedCents);
+                      const repaymentCount = (loan.repayments || []).length;
+                      const isExpanded = Boolean(expandedLoanIds[loan.id]);
 
-                    {Array.isArray(loan.repayments) && loan.repayments.length > 0 && (
-                      <View style={styles.repayHistoryBox}>
-                        <Text style={styles.repayHistoryTitle}>ফেরত দেওয়ার বিবরণ:</Text>
-                        {loan.repayments.map((rep) => (
-                          <View key={rep.id} style={styles.repayHistoryRow}>
-                            <View style={{ flex: 1 }}>
-                              <Text style={styles.repayHistoryText}>
-                                তারিখ: {rep.date}
-                                {rep.note ? ` (${rep.note})` : ''}
-                              </Text>
-                            </View>
-                            <Text style={styles.repayHistoryAmt}>
-                              +{formatMoney(rep.amount)} Tk.
+                      return (
+                        <React.Fragment key={loan.id}>
+                          <View
+                            style={[
+                              styles.tableRow,
+                              idx % 2 === 1 && styles.tableZebraRow,
+                            ]}
+                          >
+                            <Text style={[styles.tableCell, styles.colDate, styles.tableCellText]}>
+                              {loan.dateGiven}
                             </Text>
-                            <TouchableOpacity
-                              onPress={() =>
-                                openStrictDeleteDialog({
-                                  kind: 'repayment',
-                                  loanId: loan.id,
-                                  repaymentId: rep.id,
-                                  title: `${loan.borrowerName} Repayment`,
-                                  subtitle: `ফেরতের তারিখ: ${rep.date}`,
-                                  amount: rep.amount,
-                                })
-                              }
-                              style={{ paddingLeft: 6 }}
-                              accessibilityLabel="Delete Repayment Entry"
+                            <View style={[styles.tableCell, styles.colBorrower]}>
+                              <Text style={styles.tableCellBold} numberOfLines={1}>
+                                {loan.borrowerName}
+                              </Text>
+                              {loan.note ? (
+                                <Text style={styles.tableSubText} numberOfLines={1}>
+                                  {loan.note}
+                                </Text>
+                              ) : null}
+                            </View>
+                            <Text style={[styles.tableCell, styles.colLoanNum, styles.tableCellNum]}>
+                              {formatMoney(loan.amountGiven)}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.tableCell,
+                                styles.colLoanNum,
+                                styles.tableCellNum,
+                                { color: '#15803D' },
+                              ]}
                             >
-                              <Ionicons name="trash-outline" size={14} color="#DC2626" />
-                            </TouchableOpacity>
-                          </View>
-                        ))}
-                      </View>
-                    )}
+                              {formatMoney(returnedVal)}
+                            </Text>
+                            <Text
+                              style={[
+                                styles.tableCell,
+                                styles.colLoanNum,
+                                styles.tableCellNum,
+                                { color: dueVal > 0 ? '#B91C1C' : '#15803D' },
+                              ]}
+                            >
+                              {dueVal > 0 ? formatMoney(dueVal) : '0.00'}
+                            </Text>
 
-                    {dueVal > 0 && (
-                      <TouchableOpacity
-                        style={styles.repayBtn}
-                        onPress={() => openRepayModal(loan)}
-                      >
-                        <Ionicons name="return-down-back-outline" size={16} color="#FFFFFF" />
-                        <Text style={styles.repayBtnText}>ফেরত এন্ট্রি যোগ করুন (Repay)</Text>
-                      </TouchableOpacity>
-                    )}
+                            {/* Right-side Repay Button */}
+                            <View style={[styles.tableCell, styles.colRepayAction, styles.centerCell]}>
+                              {dueVal > 0 ? (
+                                <TouchableOpacity
+                                  style={styles.inlineRepayBtn}
+                                  onPress={() => openRepayModal(loan)}
+                                >
+                                  <Text style={styles.inlineRepayBtnText}>ফেরত</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <Text style={styles.paidBadgeText}>পরিশোধ</Text>
+                              )}
+                            </View>
+
+                            {/* Down Arrow for Multiple / Any Repayments */}
+                            <View style={[styles.tableCell, styles.colArrow, styles.centerCell]}>
+                              {repaymentCount > 0 ? (
+                                <TouchableOpacity
+                                  style={styles.arrowToggleBtn}
+                                  onPress={() => toggleLoanRepaymentsExpand(loan.id)}
+                                  accessibilityLabel="Toggle repayment history"
+                                >
+                                  <Ionicons
+                                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                                    size={16}
+                                    color="#1E3A8A"
+                                  />
+                                  <Text style={styles.arrowCountText}>{repaymentCount}</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <Text style={styles.dashText}>-</Text>
+                              )}
+                            </View>
+
+                            <View style={[styles.tableCell, styles.colActionSmall, styles.centerCell]}>
+                              <TouchableOpacity
+                                onPress={() =>
+                                  openStrictDeleteDialog({
+                                    kind: 'loan',
+                                    id: loan.id,
+                                    title: loan.borrowerName,
+                                    subtitle: `ধার: ${formatMoney(loan.amountGiven)} Tk. • বাকি: ${formatMoney(dueVal)} Tk.`,
+                                    amount: loan.amountGiven,
+                                  })
+                                }
+                                style={styles.deleteBtnSmall}
+                                accessibilityLabel="Delete Loan Record"
+                              >
+                                <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                              </TouchableOpacity>
+                            </View>
+                          </View>
+
+                          {/* Expanded Repayment Sub-Table */}
+                          {isExpanded && repaymentCount > 0 && (
+                            <View style={styles.expandedRepayContainer}>
+                              <Text style={styles.expandedRepayHeading}>
+                                {loan.borrowerName} — ফেরত দেওয়ার তালিকা ({repaymentCount})
+                              </Text>
+                              <View style={[styles.subTableRow, styles.subTableHeader]}>
+                                <Text style={[styles.subCell, styles.colDate, styles.subHeaderText]}>
+                                  ফেরতের তারিখ
+                                </Text>
+                                <Text style={[styles.subCell, styles.colParty, styles.subHeaderText]}>
+                                  নোট / বিবরণ
+                                </Text>
+                                <Text style={[styles.subCell, styles.colAmount, styles.subHeaderText]}>
+                                  ফেরত (Tk.)
+                                </Text>
+                                <Text style={[styles.subCell, styles.colActionSmall, styles.subHeaderText]}>
+                                  মুছুন
+                                </Text>
+                              </View>
+                              {loan.repayments.map((rep) => (
+                                <View key={rep.id} style={styles.subTableRow}>
+                                  <Text style={[styles.subCell, styles.colDate, styles.tableCellText]}>
+                                    {rep.date}
+                                  </Text>
+                                  <Text style={[styles.subCell, styles.colParty, styles.tableCellText]} numberOfLines={1}>
+                                    {rep.note || '-'}
+                                  </Text>
+                                  <Text
+                                    style={[
+                                      styles.subCell,
+                                      styles.colAmount,
+                                      styles.tableCellNum,
+                                      { color: '#15803D' },
+                                    ]}
+                                  >
+                                    +{formatMoney(rep.amount)}
+                                  </Text>
+                                  <View style={[styles.subCell, styles.colActionSmall, styles.centerCell]}>
+                                    <TouchableOpacity
+                                      onPress={() =>
+                                        openStrictDeleteDialog({
+                                          kind: 'repayment',
+                                          loanId: loan.id,
+                                          repaymentId: rep.id,
+                                          title: `${loan.borrowerName} Repayment`,
+                                          subtitle: `ফেরতের তারিখ: ${rep.date}`,
+                                          amount: rep.amount,
+                                        })
+                                      }
+                                      style={styles.deleteBtnSmall}
+                                      accessibilityLabel="Delete Repayment Entry"
+                                    >
+                                      <Ionicons name="trash-outline" size={14} color="#DC2626" />
+                                    </TouchableOpacity>
+                                  </View>
+                                </View>
+                              ))}
+                            </View>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </View>
-                );
-              })
-            )}
+                </ScrollView>
+              )}
+            </View>
           </>
         )}
       </ScrollView>
@@ -906,7 +1195,7 @@ export default function WelfareScreen() {
               </TouchableOpacity>
 
               <Text style={styles.inputLabel}>
-                নিশ্চিত করতে "{strictDeleteTarget?.title}" অথবা "DELETE" লিখুন:
+                নিশ্চিত করতে &ldquo;{strictDeleteTarget?.title}&rdquo; অথবা &ldquo;DELETE&rdquo; লিখুন:
               </Text>
               <TextInput
                 style={styles.modalInput}
@@ -931,7 +1220,7 @@ export default function WelfareScreen() {
                       backgroundColor: canConfirmStrictDelete ? '#DC2626' : '#FCA5A5',
                     },
                   ]}
-                  onPress={handleConfirmStrictDelete}
+                  onPress={() => void handleConfirmStrictDelete()}
                 >
                   <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Permanent Delete</Text>
                 </TouchableOpacity>
@@ -1007,7 +1296,7 @@ export default function WelfareScreen() {
                   styles.modalBtn,
                   { backgroundColor: cashFlowMode === 'income' ? '#16A34A' : '#DC2626' },
                 ]}
-                onPress={handleSaveCashFlow}
+                onPress={() => void handleSaveCashFlow()}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>সেভ করুন</Text>
               </TouchableOpacity>
@@ -1067,7 +1356,7 @@ export default function WelfareScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleAddLoan}
+                onPress={() => void handleAddLoan()}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>ধার সেভ করুন</Text>
               </TouchableOpacity>
@@ -1122,7 +1411,7 @@ export default function WelfareScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
-                onPress={handleSaveRepayment}
+                onPress={() => void handleSaveRepayment()}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>ফেরত সেভ করুন</Text>
               </TouchableOpacity>
@@ -1252,28 +1541,161 @@ const styles = StyleSheet.create({
     color: '#64748B',
     paddingVertical: 6,
   },
-  listRow: {
+  tableBox: {
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+  },
+  tableRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
+    minHeight: 40,
     borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    gap: 8,
+    borderBottomColor: '#E2E8F0',
   },
-  itemTitle: {
-    fontSize: 13,
+  tableHeaderRow: {
+    backgroundColor: '#1E293B',
+    minHeight: 36,
+  },
+  tableZebraRow: {
+    backgroundColor: '#F8FAFC',
+  },
+  tableCell: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    justifyContent: 'center',
+    borderRightWidth: 1,
+    borderRightColor: '#E2E8F0',
+  },
+  colDate: {
+    width: 96,
+  },
+  colMonth: {
+    width: 145,
+  },
+  colParty: {
+    width: 170,
+  },
+  colBorrower: {
+    width: 140,
+  },
+  colAmount: {
+    width: 105,
+  },
+  colLoanNum: {
+    width: 92,
+  },
+  colRepayAction: {
+    width: 68,
+  },
+  colArrow: {
+    width: 62,
+  },
+  colActionSmall: {
+    width: 54,
+    borderRightWidth: 0,
+  },
+  centerCell: {
+    alignItems: 'center',
+  },
+  tableHeaderText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textAlign: 'center',
+  },
+  tableCellText: {
+    fontSize: 11.5,
+    color: '#0F172A',
+  },
+  tableCellBold: {
+    fontSize: 12,
     fontWeight: '700',
     color: '#0F172A',
   },
-  itemSub: {
-    fontSize: 11,
+  tableSubText: {
+    fontSize: 10,
     color: '#64748B',
-    marginTop: 2,
+    marginTop: 1,
   },
-  itemAmount: {
-    fontSize: 13,
+  tableCellNum: {
+    fontSize: 11.5,
     fontWeight: '800',
+    textAlign: 'right',
+  },
+  inlineRepayBtn: {
+    backgroundColor: '#0F766E',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  inlineRepayBtnText: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  paidBadgeText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  arrowToggleBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 6,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  arrowCountText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#1E3A8A',
+  },
+  dashText: {
+    fontSize: 12,
+    color: '#94A3B8',
+    textAlign: 'center',
+  },
+  expandedRepayContainer: {
+    backgroundColor: '#F0FDF4',
+    padding: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#BBF7D0',
+  },
+  expandedRepayHeading: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#14532D',
+    marginBottom: 6,
+  },
+  subTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    minHeight: 34,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#DCFCE7',
+  },
+  subTableHeader: {
+    backgroundColor: '#166534',
+  },
+  subCell: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    justifyContent: 'center',
+  },
+  subHeaderText: {
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: '#FFFFFF',
+    textAlign: 'center',
   },
   deleteBtnSmall: {
     padding: 5,
@@ -1300,89 +1722,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: '#B91C1C',
-  },
-  loanCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 10,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    gap: 8,
-  },
-  loanCardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  loanBorrowerName: {
-    fontSize: 14,
-    fontWeight: '800',
-    color: '#0F172A',
-  },
-  loanMetricsRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  loanMetricBox: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-    borderRadius: 8,
-    padding: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  loanMetricLabel: {
-    fontSize: 10,
-    color: '#64748B',
-    fontWeight: '600',
-  },
-  loanMetricVal: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: '#0F172A',
-    marginTop: 2,
-  },
-  repayHistoryBox: {
-    backgroundColor: '#F0FDF4',
-    borderRadius: 8,
-    padding: 8,
-    borderWidth: 1,
-    borderColor: '#BBF7D0',
-    gap: 4,
-  },
-  repayHistoryTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#14532D',
-  },
-  repayHistoryRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 6,
-  },
-  repayHistoryText: {
-    fontSize: 11,
-    color: '#166534',
-  },
-  repayHistoryAmt: {
-    fontSize: 11.5,
-    fontWeight: '700',
-    color: '#15803D',
-  },
-  repayBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    backgroundColor: '#0F766E',
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  repayBtnText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '700',
   },
   strictDangerBox: {
     backgroundColor: '#FEF2F2',

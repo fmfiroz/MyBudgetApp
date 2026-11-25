@@ -48,6 +48,7 @@ const syncQueues = new Map<string, Promise<void>>();
 let unsubscribeSnapshot: (() => void) | null = null;
 let unsubscribeAppState: { remove: () => void } | null = null;
 let activeSyncUid: string | null = null;
+let syncSessionToken = 0;
 
 function toSafeDocId(key: string): string {
   return key.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -94,7 +95,11 @@ async function getLocalUpdatedAt(uid: string, key: string): Promise<number> {
   return raw ? Number(raw) || 0 : 0;
 }
 
-async function setLocalUpdatedAt(uid: string, key: string, ts: number): Promise<void> {
+async function setLocalUpdatedAt(
+  uid: string,
+  key: string,
+  ts: number
+): Promise<void> {
   await AsyncStorage.setItem(localTimestampKey(uid, key), String(ts));
 }
 
@@ -141,7 +146,9 @@ export async function fetchAllFirebaseData(
     throw new Error('Cannot read cloud data for a different signed-in user.');
   }
 
-  const snap = await getDocs(collection(db, 'users', targetUid, 'mybudget_backup'));
+  const snap = await getDocs(
+    collection(db, 'users', targetUid, 'mybudget_backup')
+  );
   if (auth.currentUser?.uid !== targetUid) {
     throw new Error('Signed-in user changed while loading cloud data.');
   }
@@ -176,7 +183,12 @@ export async function saveSnapshotToFirebase(
     await setLocalUpdatedAt(targetUid, key, nowMs);
     await setDoc(
       doc(db, 'users', targetUid, 'mybudget_backup', toSafeDocId(key)),
-      { key, value, updatedAt: new Date(nowMs).toISOString(), updatedAtMs: nowMs },
+      {
+        key,
+        value,
+        updatedAt: new Date(nowMs).toISOString(),
+        updatedAtMs: nowMs,
+      },
       { merge: true }
     );
     count++;
@@ -205,21 +217,24 @@ export async function saveLocalData(
   const serialized = typeof value === 'string' ? value : JSON.stringify(value);
   const parsed = parseStoredValue(serialized);
   const nowMs = Date.now();
-  const shouldSync = Boolean(uid && isSyncKey(storageKey));
 
   await AsyncStorage.setItem(storageKey, serialized);
-  if (!shouldSync || !uid || auth.currentUser?.uid !== uid) return;
+
+  if (!uid || !isSyncKey(storageKey) || auth.currentUser?.uid !== uid) return;
+
+  const owner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
+  if (owner === 'guest' || (owner && owner !== uid)) {
+    return;
+  }
+  if (!owner) {
+    await AsyncStorage.setItem(LOCAL_DATA_OWNER_KEY, uid);
+  }
+
+  if (auth.currentUser?.uid !== uid) return;
 
   await setLocalUpdatedAt(uid, storageKey, nowMs);
   await queuePendingChange(uid, storageKey, parsed, nowMs);
   if (auth.currentUser?.uid !== uid) return;
-
-  const owner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
-  if (!owner) {
-    await AsyncStorage.setItem(LOCAL_DATA_OWNER_KEY, uid);
-  } else if (owner !== uid) {
-    return;
-  }
 
   void syncLocalToFirebaseSafely(uid);
 }
@@ -247,7 +262,10 @@ export async function restoreAllFromFirebase(
 
   for (const [key, value] of Object.entries(cloudData)) {
     if (pending[key] !== undefined || value === null) continue;
-    entries.push([key, typeof value === 'string' ? value : JSON.stringify(value)]);
+    entries.push([
+      key,
+      typeof value === 'string' ? value : JSON.stringify(value),
+    ]);
   }
 
   if (entries.length) await AsyncStorage.multiSet(entries);
@@ -256,10 +274,14 @@ export async function restoreAllFromFirebase(
 
 async function flushPendingChanges(uid: string): Promise<void> {
   if (auth.currentUser?.uid !== uid) return;
+  const owner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
+  if (owner !== uid) return;
 
   const allKeys = await AsyncStorage.getAllKeys();
   const pendingKeys = allKeys.filter((key) => isPendingKeyForUid(key, uid));
-  const pairs = pendingKeys.length ? await AsyncStorage.multiGet(pendingKeys) : [];
+  const pairs = pendingKeys.length
+    ? await AsyncStorage.multiGet(pendingKeys)
+    : [];
 
   for (const [queueKey, raw] of pairs) {
     if (!raw || auth.currentUser?.uid !== uid) return;
@@ -326,6 +348,7 @@ export async function syncLocalToFirebaseSafely(
 }
 
 export function stopFirebaseSync(): void {
+  syncSessionToken++;
   unsubscribeSnapshot?.();
   unsubscribeSnapshot = null;
   unsubscribeAppState?.remove();
@@ -340,19 +363,41 @@ export function stopFirebaseSync(): void {
 
 export async function startFirebaseSync(uid: string): Promise<void> {
   if (auth.currentUser?.uid !== uid) return;
-  if (activeSyncUid === uid) {
+  const owner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
+  if (owner !== uid) return;
+
+  if (activeSyncUid === uid && unsubscribeSnapshot) {
     void syncLocalToFirebaseSafely(uid);
     return;
   }
 
   stopFirebaseSync();
+  const currentToken = syncSessionToken;
   activeSyncUid = uid;
 
-  // Firestore-এ কোনো ডকুমেন্ট না থাকলে বা ডিলিট হলে লোকাল (AsyncStorage) থেকে আবার পূরণ করা
+  // Firestore-এ কোনো ডকুমেন্ট না থাকলে লোকাল (AsyncStorage) থেকে পূরণ করা
   const localData = await collectLocalSyncData();
+  if (
+    currentToken !== syncSessionToken ||
+    auth.currentUser?.uid !== uid ||
+    (await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY)) !== uid
+  ) {
+    return;
+  }
+
   const localEntries = Object.entries(localData);
   if (localEntries.length) {
-    const cloudSnap = await getDocs(collection(db, 'users', uid, 'mybudget_backup'));
+    const cloudSnap = await getDocs(
+      collection(db, 'users', uid, 'mybudget_backup')
+    );
+    if (
+      currentToken !== syncSessionToken ||
+      auth.currentUser?.uid !== uid ||
+      (await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY)) !== uid
+    ) {
+      return;
+    }
+
     const existingKeys = new Set<string>();
     for (const d of cloudSnap.docs) {
       const p = d.data() as { key?: string };
@@ -363,11 +408,24 @@ export async function startFirebaseSync(uid: string): Promise<void> {
         const tsMs = (await getLocalUpdatedAt(uid, key)) || Date.now();
         await setDoc(
           doc(db, 'users', uid, 'mybudget_backup', toSafeDocId(key)),
-          { key, value, updatedAt: new Date(tsMs).toISOString(), updatedAtMs: tsMs },
+          {
+            key,
+            value,
+            updatedAt: new Date(tsMs).toISOString(),
+            updatedAtMs: tsMs,
+          },
           { merge: true }
         );
       }
     }
+  }
+
+  if (
+    currentToken !== syncSessionToken ||
+    auth.currentUser?.uid !== uid ||
+    (await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY)) !== uid
+  ) {
+    return;
   }
 
   unsubscribeSnapshot = onSnapshot(
@@ -375,38 +433,12 @@ export async function startFirebaseSync(uid: string): Promise<void> {
     { includeMetadataChanges: true },
     async (snapshot) => {
       if (
+        currentToken !== syncSessionToken ||
         snapshot.metadata.fromCache ||
         auth.currentUser?.uid !== uid ||
         (await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY)) !== uid
       ) {
         return;
-      }
-
-      // Firestore থেকে কোনো ডকুমেন্ট মুছে ফেলা হলে লোকাল AsyncStorage-এ থাকলে তা দিয়ে আবার পূরণ করা
-      for (const change of snapshot.docChanges()) {
-        if (change.type === 'removed') {
-          const removedData = change.doc.data() as { key?: string };
-          const keyFromDoc =
-            removedData?.key ||
-            Object.keys(localData).find((k) => toSafeDocId(k) === change.doc.id);
-          if (keyFromDoc && isSyncKey(keyFromDoc)) {
-            const localRaw = await AsyncStorage.getItem(keyFromDoc);
-            if (localRaw !== null) {
-              const parsedVal = parseStoredValue(localRaw);
-              const tsMs = (await getLocalUpdatedAt(uid, keyFromDoc)) || Date.now();
-              await setDoc(
-                doc(db, 'users', uid, 'mybudget_backup', toSafeDocId(keyFromDoc)),
-                {
-                  key: keyFromDoc,
-                  value: parsedVal,
-                  updatedAt: new Date(tsMs).toISOString(),
-                  updatedAtMs: tsMs,
-                },
-                { merge: true }
-              );
-            }
-          }
-        }
       }
 
       const pending = await getPendingLocalChangesForUser(uid);
@@ -444,6 +476,7 @@ export async function startFirebaseSync(uid: string): Promise<void> {
       }
 
       if (
+        currentToken !== syncSessionToken ||
         auth.currentUser?.uid !== uid ||
         (await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY)) !== uid
       ) {
@@ -458,7 +491,11 @@ export async function startFirebaseSync(uid: string): Promise<void> {
   );
 
   const onAppStateChange = (state: AppStateStatus) => {
-    if (state === 'active' && auth.currentUser?.uid === uid) {
+    if (
+      state === 'active' &&
+      currentToken === syncSessionToken &&
+      auth.currentUser?.uid === uid
+    ) {
       void syncLocalToFirebaseSafely(uid);
     }
   };

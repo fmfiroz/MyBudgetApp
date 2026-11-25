@@ -141,11 +141,19 @@ const parseDDMMYYYY = (dateStr: string): Date | null => {
   const day = Number(parts[0]);
   const month = Number(parts[1]) - 1;
   const year = Number(parts[2]);
-  if (!Number.isInteger(day) || !Number.isInteger(month) || !Number.isInteger(year)) {
+  if (
+    !Number.isInteger(day) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(year)
+  ) {
     return null;
   }
   const dt = new Date(year, month, day);
-  if (dt.getFullYear() !== year || dt.getMonth() !== month || dt.getDate() !== day) {
+  if (
+    dt.getFullYear() !== year ||
+    dt.getMonth() !== month ||
+    dt.getDate() !== day
+  ) {
     return null;
   }
   return dt;
@@ -185,61 +193,68 @@ export default function VehicleExpenseScreen() {
     entries: [],
   });
 
-  const [savedItemMemory, setSavedItemMemory] = useState<SavedItemTemplate[]>([]);
+  const [savedItemMemory, setSavedItemMemory] = useState<SavedItemTemplate[]>(
+    []
+  );
 
-  // Add/Edit Entry Modal
   const [modalVisible, setModalVisible] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // Fuel Finish Reading Modal
   const [finishModalVisible, setFinishModalVisible] = useState(false);
-  const [finishDateInput, setFinishDateInput] = useState<string>(getTodayDDMMYYYY());
+  const [finishDateInput, setFinishDateInput] = useState<string>(
+    getTodayDDMMYYYY()
+  );
   const [finishReadingInput, setFinishReadingInput] = useState<string>('');
   const [finishNotesInput, setFinishNotesInput] = useState<string>('');
 
-  // Safe Cancel Pending Finish Modal
-  const [cancelPendingModalVisible, setCancelPendingModalVisible] = useState(false);
+  const [cancelPendingModalVisible, setCancelPendingModalVisible] =
+    useState(false);
   const [cancelPendingCooldown, setCancelPendingCooldown] = useState<number>(0);
-  const cancelPendingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const cancelPendingTimerRef = useRef<ReturnType<typeof setInterval> | null>(
+    null
+  );
 
-  // Date Picker Modal
   const [datePickerVisible, setDatePickerVisible] = useState(false);
-  const [datePickerTarget, setDatePickerTarget] = useState<'entry' | 'finish'>('entry');
-  const [pickerYear, setPickerYear] = useState<number>(new Date().getFullYear());
-  const [pickerMonth, setPickerMonth] = useState<number>(new Date().getMonth() + 1);
+  const [datePickerTarget, setDatePickerTarget] = useState<'entry' | 'finish'>(
+    'entry'
+  );
+  const [pickerYear, setPickerYear] = useState<number>(
+    new Date().getFullYear()
+  );
+  const [pickerMonth, setPickerMonth] = useState<number>(
+    new Date().getMonth() + 1
+  );
   const [pickerDay, setPickerDay] = useState<number>(new Date().getDate());
 
-  // Add Vehicle Modal
   const [vehicleModalVisible, setVehicleModalVisible] = useState(false);
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [vehNameInput, setVehNameInput] = useState<string>('');
-  const [vehCategoryInput, setVehCategoryInput] = useState<VehicleCategory>('Bike');
-  const [vehCustomCategoryInput, setVehCustomCategoryInput] = useState<string>('');
+  const [vehCategoryInput, setVehCategoryInput] =
+    useState<VehicleCategory>('Bike');
+  const [vehCustomCategoryInput, setVehCustomCategoryInput] =
+    useState<string>('');
   const [vehRegNoInput, setVehRegNoInput] = useState<string>('');
 
-  // Safe Delete Modal States
-  const [deleteTarget, setDeleteTarget] = useState<VehicleLogEntry | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<VehicleLogEntry | null>(
+    null
+  );
   const [deleteChecked, setDeleteChecked] = useState<boolean>(false);
   const [deleteCooldown, setDeleteCooldown] = useState<number>(0);
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Common form states
   const [kind, setKind] = useState<EntryKind>('fuel');
   const [dateInput, setDateInput] = useState<string>(getTodayDDMMYYYY());
   const [notesInput, setNotesInput] = useState<string>('');
 
-  // Fuel load form states
   const [readingInput, setReadingInput] = useState<string>('');
   const [fuelLtrInput, setFuelLtrInput] = useState<string>('');
   const [rateInput, setRateInput] = useState<string>('');
   const [takaInput, setTakaInput] = useState<string>('');
 
-  // Servicing form states
   const [serviceNameInput, setServiceNameInput] = useState<string>('');
   const [servicePriceInput, setServicePriceInput] = useState<string>('');
   const [serviceItems, setServiceItems] = useState<PurchasedPartItem[]>([]);
 
-  // Inline sub-form for adding an item inside Servicing
   const [showItemSubForm, setShowItemSubForm] = useState<boolean>(false);
   const [partNameInput, setPartNameInput] = useState<string>('');
   const [partBrandInput, setPartBrandInput] = useState<string>('');
@@ -259,6 +274,7 @@ export default function VehicleExpenseScreen() {
   }, [router]);
 
   useEffect(() => {
+    let isMounted = true;
     const loadData = async () => {
       try {
         const [raw, rawItems] = await Promise.all([
@@ -266,20 +282,25 @@ export default function VehicleExpenseScreen() {
           AsyncStorage.getItem(SAVED_ITEMS_KEY),
         ]);
 
+        if (!isMounted) return;
+
         if (raw) {
           const parsed = JSON.parse(raw) as Partial<VehicleStoreData>;
-          const loadedVehicles = Array.isArray(parsed.vehicles) ? parsed.vehicles : [];
+          const loadedVehicles = Array.isArray(parsed.vehicles)
+            ? parsed.vehicles
+            : [];
           const activeId =
             parsed.selectedVehicleId &&
             loadedVehicles.some((v) => v.id === parsed.selectedVehicleId)
               ? parsed.selectedVehicleId
-              : loadedVehicles[0]?.id ?? null;
+              : (loadedVehicles[0]?.id ?? null);
 
           setStore({
             vehicles: loadedVehicles,
             selectedVehicleId: activeId,
             pendingFuelByVehicle:
-              parsed.pendingFuelByVehicle && typeof parsed.pendingFuelByVehicle === 'object'
+              parsed.pendingFuelByVehicle &&
+              typeof parsed.pendingFuelByVehicle === 'object'
                 ? parsed.pendingFuelByVehicle
                 : {},
             entries: Array.isArray(parsed.entries) ? parsed.entries : [],
@@ -296,7 +317,10 @@ export default function VehicleExpenseScreen() {
         console.log('Failed to load vehicle log data:', e);
       }
     };
-    loadData();
+    void loadData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -319,14 +343,17 @@ export default function VehicleExpenseScreen() {
     }
   }, []);
 
-  const persistSavedItemMemory = useCallback(async (items: SavedItemTemplate[]) => {
-    setSavedItemMemory(items);
-    try {
-      await saveLocalData(SAVED_ITEMS_KEY, items);
-    } catch (e) {
-      console.log('Failed to save item memory:', e);
-    }
-  }, []);
+  const persistSavedItemMemory = useCallback(
+    async (items: SavedItemTemplate[]) => {
+      setSavedItemMemory(items);
+      try {
+        await saveLocalData(SAVED_ITEMS_KEY, items);
+      } catch (e) {
+        console.log('Failed to save item memory:', e);
+      }
+    },
+    []
+  );
 
   const recordItemToMemory = useCallback(
     async (part: PurchasedPartItem) => {
@@ -377,7 +404,9 @@ export default function VehicleExpenseScreen() {
 
   const activeVehicle = useMemo(() => {
     if (!store.selectedVehicleId) return null;
-    return store.vehicles.find((v) => v.id === store.selectedVehicleId) || null;
+    return (
+      store.vehicles.find((v) => v.id === store.selectedVehicleId) || null
+    );
   }, [store.vehicles, store.selectedVehicleId]);
 
   const activePendingFuel = useMemo(() => {
@@ -418,11 +447,17 @@ export default function VehicleExpenseScreen() {
   const handleSaveVehicle = async () => {
     const cleanName = vehNameInput.trim();
     if (!cleanName) {
-      Alert.alert('তথ্য অসম্পূর্ণ', 'অনুগ্রহ করে গাড়ির নাম লিখুন (যেমন: Pulsar 150, Corolla)।');
+      Alert.alert(
+        'তথ্য অসম্পূর্ণ',
+        'অনুগ্রহ করে গাড়ির নাম লিখুন (যেমন: Pulsar 150, Corolla)।'
+      );
       return;
     }
     if (vehCategoryInput === 'Other' && !vehCustomCategoryInput.trim()) {
-      Alert.alert('তথ্য অসম্পূর্ণ', 'Other সিলেক্ট করলে গাড়ির ধরন লিখুন।');
+      Alert.alert(
+        'তথ্য অসম্পূর্ণ',
+        'Other সিলেক্ট করলে গাড়ির ধরন লিখুন।'
+      );
       return;
     }
 
@@ -433,7 +468,9 @@ export default function VehicleExpenseScreen() {
       name: cleanName,
       category: vehCategoryInput,
       customCategory:
-        vehCategoryInput === 'Other' ? vehCustomCategoryInput.trim() : undefined,
+        vehCategoryInput === 'Other'
+          ? vehCustomCategoryInput.trim()
+          : undefined,
       regNo: vehRegNoInput.trim() || undefined,
     };
 
@@ -444,7 +481,9 @@ export default function VehicleExpenseScreen() {
             vehicle.id === editingVehicleId ? updatedVehicle : vehicle
           )
         : [...store.vehicles, updatedVehicle],
-      selectedVehicleId: editingVehicleId ? store.selectedVehicleId : updatedVehicle.id,
+      selectedVehicleId: editingVehicleId
+        ? store.selectedVehicleId
+        : updatedVehicle.id,
     });
 
     setVehNameInput('');
@@ -456,8 +495,12 @@ export default function VehicleExpenseScreen() {
 
   const handleDeleteActiveVehicle = () => {
     if (!activeVehicle) return;
-    const hasEntries = store.entries.some((entry) => entry.vehicleId === activeVehicle.id);
-    const hasPendingReading = Boolean(store.pendingFuelByVehicle[activeVehicle.id]);
+    const hasEntries = store.entries.some(
+      (entry) => entry.vehicleId === activeVehicle.id
+    );
+    const hasPendingReading = Boolean(
+      store.pendingFuelByVehicle[activeVehicle.id]
+    );
     if (hasEntries || hasPendingReading) {
       Alert.alert(
         'Vehicle has records',
@@ -499,13 +542,19 @@ export default function VehicleExpenseScreen() {
     if (!activeVehicle) return;
     const cleanDate = finishDateInput.trim() || getTodayDDMMYYYY();
     if (!parseDDMMYYYY(cleanDate)) {
-      Alert.alert('তারিখ সঠিক নয়', 'অনুগ্রহ করে DD/MM/YYYY ফরম্যাটে তারিখ লিখুন।');
+      Alert.alert(
+        'তারিখ সঠিক নয়',
+        'অনুগ্রহ করে DD/MM/YYYY ফরম্যাটে তারিখ লিখুন।'
+      );
       return;
     }
 
     const parsedR = parseOptionalNum(finishReadingInput);
     if (parsedR === null || parsedR < 0) {
-      Alert.alert('রিডিং প্রয়োজন', 'তেল শেষ বা রিজার্ভে পড়ার মিটার রিডিং (0 বা তার বেশি) লিখুন।');
+      Alert.alert(
+        'রিডিং প্রয়োজন',
+        'তেল শেষ বা রিজার্ভে পড়ার মিটার রিডিং (0 বা তার বেশি) লিখুন।'
+      );
       return;
     }
 
@@ -639,7 +688,9 @@ export default function VehicleExpenseScreen() {
     setEditingId(null);
     setKind(defaultKind);
 
-    const lastFuel = [...vehicleEntries].reverse().find((e) => e.kind === 'fuel');
+    const lastFuel = [...vehicleEntries]
+      .reverse()
+      .find((e) => e.kind === 'fuel');
     if (defaultKind === 'fuel' && activePendingFuel) {
       setDateInput(activePendingFuel.date || getTodayDDMMYYYY());
       setReadingInput(String(activePendingFuel.reading));
@@ -651,7 +702,9 @@ export default function VehicleExpenseScreen() {
     }
 
     setFuelLtrInput('');
-    setRateInput(lastFuel && lastFuel.ratePerLitre > 0 ? String(lastFuel.ratePerLitre) : '');
+    setRateInput(
+      lastFuel && lastFuel.ratePerLitre > 0 ? String(lastFuel.ratePerLitre) : ''
+    );
     setTakaInput('');
 
     setServiceNameInput('');
@@ -666,15 +719,20 @@ export default function VehicleExpenseScreen() {
     setEditingId(item.id);
     setKind(item.kind);
     setDateInput(item.date);
-    const hasR = item.hasReading !== undefined ? item.hasReading : item.reading > 0;
+    const hasR =
+      item.hasReading !== undefined ? item.hasReading : item.reading > 0;
     setReadingInput(hasR ? String(item.reading) : '');
     setFuelLtrInput(item.fuelLtr > 0 ? String(item.fuelLtr) : '');
     setRateInput(item.ratePerLitre > 0 ? String(item.ratePerLitre) : '');
     setTakaInput(item.taka > 0 ? String(item.taka) : '');
 
     setServiceNameInput(item.serviceName || '');
-    setServicePriceInput(item.serviceCharge > 0 ? String(item.serviceCharge) : '');
-    setServiceItems(Array.isArray(item.purchasedItems) ? item.purchasedItems : []);
+    setServicePriceInput(
+      item.serviceCharge > 0 ? String(item.serviceCharge) : ''
+    );
+    setServiceItems(
+      Array.isArray(item.purchasedItems) ? item.purchasedItems : []
+    );
     resetItemSubForm();
     setNotesInput(item.notes || '');
 
@@ -689,7 +747,10 @@ export default function VehicleExpenseScreen() {
     if (!activeVehicle) return;
     const cleanDate = dateInput.trim() || getTodayDDMMYYYY();
     if (!parseDDMMYYYY(cleanDate)) {
-      Alert.alert('তারিখ সঠিক নয়', 'অনুগ্রহ করে DD/MM/YYYY ফরম্যাটে তারিখ লিখুন (যেমন: 22/11/2026)।');
+      Alert.alert(
+        'তারিখ সঠিক নয়',
+        'অনুগ্রহ করে DD/MM/YYYY ফরম্যাটে তারিখ লিখুন (যেমন: 22/11/2026)।'
+      );
       return;
     }
 
@@ -709,7 +770,10 @@ export default function VehicleExpenseScreen() {
       }
 
       if (taka <= 0) {
-        Alert.alert('তথ্য অসম্পূর্ণ', 'অনুগ্রহ করে Fuel (Ltr) বা Taka লিখুন।');
+        Alert.alert(
+          'তথ্য অসম্পূর্ণ',
+          'অনুগ্রহ করে Fuel (Ltr) বা Taka লিখুন।'
+        );
         return;
       }
 
@@ -718,7 +782,9 @@ export default function VehicleExpenseScreen() {
         : undefined;
 
       const finishDate =
-        !editingId && activePendingFuel ? activePendingFuel.date : existingEntry?.finishDate;
+        !editingId && activePendingFuel
+          ? activePendingFuel.date
+          : existingEntry?.finishDate;
       const finishReading =
         !editingId && activePendingFuel
           ? activePendingFuel.reading
@@ -726,7 +792,7 @@ export default function VehicleExpenseScreen() {
       const hasFinishReading =
         !editingId && activePendingFuel
           ? true
-          : existingEntry?.hasFinishReading ?? finishReading !== undefined;
+          : (existingEntry?.hasFinishReading ?? finishReading !== undefined);
 
       const record: VehicleLogEntry = {
         id: editingId || `vlog-${Date.now()}`,
@@ -756,7 +822,6 @@ export default function VehicleExpenseScreen() {
         const da = parseDDMMYYYY(a.date)?.getTime() || 0;
         const db = parseDDMMYYYY(b.date)?.getTime() || 0;
         if (da !== db) return da - db;
-        if (a.reading !== b.reading) return a.reading - b.reading;
         return a.createdAt - b.createdAt;
       });
 
@@ -777,10 +842,14 @@ export default function VehicleExpenseScreen() {
         return;
       }
       const srvCharge = parseNum(servicePriceInput);
-      const totalServiceCost = Math.round((srvCharge + serviceItemsTotal) * 100) / 100;
+      const totalServiceCost =
+        Math.round((srvCharge + serviceItemsTotal) * 100) / 100;
 
       if (totalServiceCost <= 0) {
-        Alert.alert('তথ্য অসম্পূর্ণ', 'অনুগ্রহ করে সার্ভিস প্রাইস অথবা কেনা আইটেমের দাম লিখুন।');
+        Alert.alert(
+          'তথ্য অসম্পূর্ণ',
+          'অনুগ্রহ করে সার্ভিস প্রাইস অথবা কেনা আইটেমের দাম লিখুন।'
+        );
         return;
       }
 
@@ -878,7 +947,11 @@ export default function VehicleExpenseScreen() {
 
   const getEffectiveReading = (e: VehicleLogEntry): number | null => {
     if (e.kind !== 'fuel') return null;
-    if (e.hasFinishReading && typeof e.finishReading === 'number' && e.finishReading >= 0) {
+    if (
+      e.hasFinishReading &&
+      typeof e.finishReading === 'number' &&
+      e.finishReading >= 0
+    ) {
       return e.finishReading;
     }
     return entryHasValidReading(e) ? e.reading : null;
@@ -927,14 +1000,21 @@ export default function VehicleExpenseScreen() {
       const currDateStr = getEffectiveDate(entry);
       const days = prevDateStr ? diffDaysBetween(prevDateStr, currDateStr) : null;
 
-      const kmPerDay = usage !== null && days !== null && days > 0 ? usage / days : null;
-      const fuelUsedForSegment = prev && prev.fuelLtr > 0 ? prev.fuelLtr : entry.fuelLtr;
-      const fuelCostForSegment = prev && prev.taka > 0 ? prev.taka : entry.taka;
+      const kmPerDay =
+        usage !== null && days !== null && days > 0 ? usage / days : null;
+      const fuelUsedForSegment =
+        prev && prev.fuelLtr > 0 ? prev.fuelLtr : entry.fuelLtr;
+      const fuelCostForSegment =
+        prev && prev.taka > 0 ? prev.taka : entry.taka;
 
       const mileage =
-        usage !== null && fuelUsedForSegment > 0 ? usage / fuelUsedForSegment : null;
-      const costPerDay = days !== null && days > 0 ? fuelCostForSegment / days : null;
-      const costPerKm = usage !== null && usage > 0 ? fuelCostForSegment / usage : null;
+        usage !== null && fuelUsedForSegment > 0
+          ? usage / fuelUsedForSegment
+          : null;
+      const costPerDay =
+        days !== null && days > 0 ? fuelCostForSegment / days : null;
+      const costPerKm =
+        usage !== null && usage > 0 ? fuelCostForSegment / usage : null;
 
       return {
         entry,
@@ -952,13 +1032,16 @@ export default function VehicleExpenseScreen() {
       .map((e) => getEffectiveReading(e))
       .filter((r): r is number => r !== null);
 
-    const firstReading = effectiveReadings.length > 0 ? effectiveReadings[0] : null;
+    const firstReading =
+      effectiveReadings.length > 0 ? effectiveReadings[0] : null;
     const lastReading =
       effectiveReadings.length > 0
         ? effectiveReadings[effectiveReadings.length - 1]
         : null;
     const totalReadingDiff =
-      firstReading !== null && lastReading !== null && effectiveReadings.length >= 2
+      firstReading !== null &&
+      lastReading !== null &&
+      effectiveReadings.length >= 2
         ? Math.max(0, lastReading - firstReading)
         : null;
 
@@ -966,35 +1049,51 @@ export default function VehicleExpenseScreen() {
       firstReading === null || lastReading === null
         ? '-'
         : effectiveReadings.length === 1
-        ? `${firstReading}`
-        : `${firstReading}-${lastReading}`;
+          ? `${firstReading}`
+          : `${firstReading}-${lastReading}`;
 
     const totalFuelLtr = fuelEntries.reduce((s, e) => s + e.fuelLtr, 0);
-    const fuelRates = fuelEntries.filter((e) => e.ratePerLitre > 0).map((e) => e.ratePerLitre);
+    const fuelRates = fuelEntries
+      .filter((e) => e.ratePerLitre > 0)
+      .map((e) => e.ratePerLitre);
     const avgRate =
-      fuelRates.length > 0 ? fuelRates.reduce((a, b) => a + b, 0) / fuelRates.length : null;
+      fuelRates.length > 0
+        ? fuelRates.reduce((a, b) => a + b, 0) / fuelRates.length
+        : null;
 
     const totalFuelTaka = fuelEntries.reduce((s, e) => s + e.taka, 0);
 
     const totalServiceCharge = vehicleEntries.reduce(
-      (s, e) => s + (e.kind === 'maintenance' ? parseNum(e.serviceCharge) : 0),
+      (s, e) =>
+        s + (e.kind === 'maintenance' ? parseNum(e.serviceCharge) : 0),
       0
     );
-    const totalItemsCost = rowsWithCalc.reduce((s, r) => s + r.itemsTotalCost, 0);
+    const totalItemsCost = rowsWithCalc.reduce(
+      (s, r) => s + r.itemsTotalCost,
+      0
+    );
 
-    const usageList = rowsWithCalc.map((r) => r.usage).filter((v): v is number => v !== null);
+    const usageList = rowsWithCalc
+      .map((r) => r.usage)
+      .filter((v): v is number => v !== null);
     const totalUsage = usageList.reduce((a, b) => a + b, 0);
 
-    const daysList = rowsWithCalc.map((r) => r.days).filter((v): v is number => v !== null);
+    const daysList = rowsWithCalc
+      .map((r) => r.days)
+      .filter((v): v is number => v !== null);
     const totalDays = daysList.reduce((a, b) => a + b, 0);
 
-    const kmPerDayList = rowsWithCalc.map((r) => r.kmPerDay).filter((v): v is number => v !== null);
+    const kmPerDayList = rowsWithCalc
+      .map((r) => r.kmPerDay)
+      .filter((v): v is number => v !== null);
     const avgKmPerDay =
       kmPerDayList.length > 0
         ? kmPerDayList.reduce((a, b) => a + b, 0) / kmPerDayList.length
         : null;
 
-    const mileageList = rowsWithCalc.map((r) => r.mileage).filter((v): v is number => v !== null);
+    const mileageList = rowsWithCalc
+      .map((r) => r.mileage)
+      .filter((v): v is number => v !== null);
     const avgMileage =
       mileageList.length > 0
         ? mileageList.reduce((a, b) => a + b, 0) / mileageList.length
@@ -1016,7 +1115,8 @@ export default function VehicleExpenseScreen() {
         ? costPerKmList.reduce((a, b) => a + b, 0) / costPerKmList.length
         : null;
 
-    const lastFuelEntry = fuelEntries.length > 0 ? fuelEntries[fuelEntries.length - 1] : null;
+    const lastFuelEntry =
+      fuelEntries.length > 0 ? fuelEntries[fuelEntries.length - 1] : null;
     const lastRowCalc = lastFuelEntry
       ? rowsWithCalc.find((r) => r.entry.id === lastFuelEntry.id)
       : null;
@@ -1024,24 +1124,25 @@ export default function VehicleExpenseScreen() {
       lastRowCalc?.mileage && lastRowCalc.mileage > 0
         ? lastRowCalc.mileage
         : avgMileage && avgMileage > 0
-        ? avgMileage
-        : null;
+          ? avgMileage
+          : null;
 
     const currentFuelQty = lastFuelEntry?.fuelLtr || 0;
     const baseReadingForTarget = activePendingFuel
       ? activePendingFuel.reading
       : lastFuelEntry
-      ? getEffectiveReading(lastFuelEntry)
-      : null;
+        ? getEffectiveReading(lastFuelEntry)
+        : null;
 
     const estimatedRangeKm =
-      currentFuelQty > 0 && referenceMileage !== null ? currentFuelQty * referenceMileage : null;
+      currentFuelQty > 0 && referenceMileage !== null
+        ? currentFuelQty * referenceMileage
+        : null;
     const nextTargetReading =
       baseReadingForTarget !== null && estimatedRangeKm !== null
         ? Math.round(baseReadingForTarget + estimatedRangeKm)
         : null;
 
-    // বর্তমান এন্ট্রিগুলো সবার উপরে/সামনে দেখানোর জন্য ক্রম উল্টানো হয়েছে
     const newestFirstRows = [...rowsWithCalc].reverse();
 
     return {
@@ -1052,7 +1153,8 @@ export default function VehicleExpenseScreen() {
         totalFuelLtr: totalFuelLtr > 0 ? totalFuelLtr : null,
         avgRate,
         totalFuelTaka: totalFuelTaka > 0 ? totalFuelTaka : null,
-        totalServiceCharge: totalServiceCharge > 0 ? totalServiceCharge : null,
+        totalServiceCharge:
+          totalServiceCharge > 0 ? totalServiceCharge : null,
         totalItemsCost: totalItemsCost > 0 ? totalItemsCost : null,
         totalUsage: totalUsage > 0 ? totalUsage : null,
         totalDays: totalDays > 0 ? totalDays : null,
@@ -1076,18 +1178,22 @@ export default function VehicleExpenseScreen() {
   const pickerDaysArray = Array.from({ length: maxPickerDays }, (_, i) => i + 1);
   const pickerMonthsArray = Array.from({ length: 12 }, (_, i) => i + 1);
   const currentYear = new Date().getFullYear();
-  const pickerYearsArray = Array.from({ length: 12 }, (_, i) => currentYear - 8 + i);
+  const pickerYearsArray = Array.from(
+    { length: 12 },
+    (_, i) => currentYear - 8 + i
+  );
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBackPress} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
         </TouchableOpacity>
         <View style={styles.headerTitleBox}>
           <Text style={styles.headerTitle}>
-            {canManageVehicleData ? 'Manage Vehicle Records' : 'Vehicle Log & Expense Sheet'}
+            {canManageVehicleData
+              ? 'Manage Vehicle Records'
+              : 'Vehicle Log & Expense Sheet'}
           </Text>
           <Text style={styles.headerSub}>
             {activeVehicle
@@ -1101,7 +1207,9 @@ export default function VehicleExpenseScreen() {
         <View style={styles.emptyInitialState}>
           <View style={styles.emptyCard}>
             <Ionicons name="car-sport-outline" size={44} color="#1D4ED8" />
-            <Text style={styles.emptyInitialTitle}>কোনো Vehicle যুক্ত করা নেই</Text>
+            <Text style={styles.emptyInitialTitle}>
+              কোনো Vehicle যুক্ত করা নেই
+            </Text>
             <Text style={styles.emptyInitialSub}>
               {canManageVehicleData
                 ? 'No vehicle is available to manage. Add a vehicle from the Vehicle page.'
@@ -1112,7 +1220,11 @@ export default function VehicleExpenseScreen() {
                 style={styles.primaryAddVehicleBtn}
                 onPress={openAddVehicleModal}
               >
-                <Ionicons name="add-circle-outline" size={20} color="#FFFFFF" />
+                <Ionicons
+                  name="add-circle-outline"
+                  size={20}
+                  color="#FFFFFF"
+                />
                 <Text style={styles.primaryAddVehicleText}>Add Vehicle</Text>
               </TouchableOpacity>
             )}
@@ -1121,23 +1233,31 @@ export default function VehicleExpenseScreen() {
       ) : (
         <>
           <View style={styles.vehicleBar}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ flex: 1 }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ flex: 1 }}
+            >
               <View style={styles.vehicleChipsRow}>
                 {store.vehicles.map((veh) => {
                   const isSelected = veh.id === activeVehicle.id;
                   return (
                     <TouchableOpacity
                       key={veh.id}
-                      style={[styles.vehicleChip, isSelected && styles.vehicleChipActive]}
-                      onPress={() => handleSelectVehicle(veh.id)}
+                      style={[
+                        styles.vehicleChip,
+                        isSelected && styles.vehicleChipActive,
+                      ]}
+                      onPress={() => void handleSelectVehicle(veh.id)}
                     >
                       <Ionicons
                         name={
                           veh.category === 'Car'
                             ? 'car-outline'
-                            : veh.category === 'Bike' || veh.category === 'Scooty'
-                            ? 'bicycle-outline'
-                            : 'bus-outline'
+                            : veh.category === 'Bike' ||
+                                veh.category === 'Scooty'
+                              ? 'bicycle-outline'
+                              : 'bus-outline'
                         }
                         size={15}
                         color={isSelected ? '#FFFFFF' : '#334155'}
@@ -1161,7 +1281,11 @@ export default function VehicleExpenseScreen() {
                 style={styles.addVehicleBtn}
                 onPress={openAddVehicleModal}
               >
-                <Ionicons name="add-circle-outline" size={15} color="#1D4ED8" />
+                <Ionicons
+                  name="add-circle-outline"
+                  size={15}
+                  color="#1D4ED8"
+                />
                 <Text style={styles.addVehicleBtnText}>+ Vehicle</Text>
               </TouchableOpacity>
             )}
@@ -1190,7 +1314,8 @@ export default function VehicleExpenseScreen() {
             <View style={styles.pendingBanner}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.pendingTitle}>
-                  ⏳ Fuel Finish Reading: {activePendingFuel.reading} km ({activePendingFuel.date})
+                  ⏳ Fuel Finish Reading: {activePendingFuel.reading} km (
+                  {activePendingFuel.date})
                 </Text>
                 <Text style={styles.pendingSub}>
                   {canManageVehicleData
@@ -1203,24 +1328,31 @@ export default function VehicleExpenseScreen() {
                   onPress={requestCancelPendingFinish}
                   style={styles.pendingClearBtn}
                 >
-                  <Ionicons name="lock-closed-outline" size={12} color="#92400E" />
+                  <Ionicons
+                    name="lock-closed-outline"
+                    size={12}
+                    color="#92400E"
+                  />
                   <Text style={styles.pendingClearText}>বাতিল</Text>
                 </TouchableOpacity>
               )}
             </View>
           )}
 
-          {/* Target Card with High-Contrast Text */}
           <View style={styles.targetCard}>
             <View style={styles.targetHeader}>
               <Ionicons name="flag" size={16} color="#FFFFFF" />
-              <Text style={styles.targetTitle}>TARGET (পরবর্তী রিফুয়েলিং পূর্বাভাস)</Text>
+              <Text style={styles.targetTitle}>
+                TARGET (পরবর্তী রিফুয়েলিং পূর্বাভাস)
+              </Text>
             </View>
             {targetInfo.nextTargetReading !== null ? (
               <View style={styles.targetGrid}>
                 <View style={styles.targetItem}>
                   <Text style={styles.targetLabel}>Current Fuel</Text>
-                  <Text style={styles.targetVal}>{targetInfo.currentFuelQty.toFixed(2)} Ltr</Text>
+                  <Text style={styles.targetVal}>
+                    {targetInfo.currentFuelQty.toFixed(2)} Ltr
+                  </Text>
                 </View>
                 <View style={styles.targetItem}>
                   <Text style={styles.targetLabel}>Prev. Milage</Text>
@@ -1236,31 +1368,49 @@ export default function VehicleExpenseScreen() {
                 </View>
                 <View style={[styles.targetItem, styles.targetHighlightBox]}>
                   <Text style={styles.targetHighlightLabel}>Target Reading</Text>
-                  <Text style={styles.targetHighlightVal}>{targetInfo.nextTargetReading} km</Text>
+                  <Text style={styles.targetHighlightVal}>
+                    {targetInfo.nextTargetReading} km
+                  </Text>
                 </View>
               </View>
             ) : (
               <Text style={styles.targetEmptyText}>
-                কমপক্ষে ২টি Fuel এন্ট্রি (Reading সহ, ০ থেকে শুরু হলেও চলবে) দিলে আগের Milage ও বর্তমান তেলের ভিত্তিতে পরবর্তী Target Reading দেখাবে।
+                কমপক্ষে ২টি Fuel এন্ট্রি (Reading সহ, ০ থেকে শুরু হলেও চলবে)
+                দিলে আগের Milage ও বর্তমান তেলের ভিত্তিতে পরবর্তী Target Reading
+                দেখাবে।
               </Text>
             )}
           </View>
 
           {canManageVehicleData && (
             <View style={styles.quickBar}>
-              <TouchableOpacity style={styles.finishChip} onPress={openFinishReadingModal}>
-                <Text style={styles.finishChipText}>⏱ Fuel Finish Reading</Text>
+              <TouchableOpacity
+                style={styles.finishChip}
+                onPress={openFinishReadingModal}
+              >
+                <Text style={styles.finishChipText}>
+                  ⏱ Fuel Finish Reading
+                </Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.quickChip} onPress={() => openAddModal('fuel')}>
+              <TouchableOpacity
+                style={styles.quickChip}
+                onPress={() => openAddModal('fuel')}
+              >
                 <Text style={styles.quickChipText}>+ Fuel (Load)</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.quickChip} onPress={() => openAddModal('maintenance')}>
+              <TouchableOpacity
+                style={styles.quickChip}
+                onPress={() => openAddModal('maintenance')}
+              >
                 <Text style={styles.quickChipText}>+ Servicing</Text>
               </TouchableOpacity>
             </View>
           )}
 
-          <ScrollView style={styles.verticalScroll} keyboardShouldPersistTaps="handled">
+          <ScrollView
+            style={styles.verticalScroll}
+            keyboardShouldPersistTaps="handled"
+          >
             <ScrollView horizontal showsHorizontalScrollIndicator={true}>
               <View style={styles.tableContainer}>
                 <View style={[styles.tableRow, styles.avgRow]}>
@@ -1268,19 +1418,29 @@ export default function VehicleExpenseScreen() {
                     <Text style={styles.avgText}>AVERAGE &gt;&gt;</Text>
                   </View>
                   <View style={[styles.cell, styles.colReading]}>
-                    <Text style={styles.avgText}>{averageSummary.readingRangeText}</Text>
+                    <Text style={styles.avgText}>
+                      {averageSummary.readingRangeText}
+                    </Text>
                     {averageSummary.totalReadingDiff !== null && (
-                      <Text style={styles.avgSubText}>({averageSummary.totalReadingDiff} km)</Text>
+                      <Text style={styles.avgSubText}>
+                        ({averageSummary.totalReadingDiff} km)
+                      </Text>
                     )}
                   </View>
                   <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.totalFuelLtr, 2)}</Text>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.totalFuelLtr, 2)}
+                    </Text>
                   </View>
                   <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.avgRate, 2)}</Text>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.avgRate, 2)}
+                    </Text>
                   </View>
                   <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.totalFuelTaka, 2)}</Text>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.totalFuelTaka, 2)}
+                    </Text>
                   </View>
                   <View style={[styles.cell, styles.colService]}>
                     <Text style={styles.avgText}>
@@ -1288,27 +1448,41 @@ export default function VehicleExpenseScreen() {
                     </Text>
                   </View>
                   <View style={[styles.cell, styles.colItem]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.totalItemsCost, 2)}</Text>
-                  </View>
-                  <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.totalUsage, 2)}</Text>
-                  </View>
-                  <View style={[styles.cell, styles.colDays]}>
                     <Text style={styles.avgText}>
-                      {averageSummary.totalDays !== null ? String(averageSummary.totalDays) : '-'}
+                      {fmtFixed(averageSummary.totalItemsCost, 2)}
                     </Text>
                   </View>
                   <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.avgKmPerDay, 2)}</Text>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.totalUsage, 2)}
+                    </Text>
+                  </View>
+                  <View style={[styles.cell, styles.colDays]}>
+                    <Text style={styles.avgText}>
+                      {averageSummary.totalDays !== null
+                        ? String(averageSummary.totalDays)
+                        : '-'}
+                    </Text>
                   </View>
                   <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.avgMileage, 2)}</Text>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.avgKmPerDay, 2)}
+                    </Text>
                   </View>
                   <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.avgCostPerDay, 2)}</Text>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.avgMileage, 2)}
+                    </Text>
                   </View>
                   <View style={[styles.cell, styles.colNum]}>
-                    <Text style={styles.avgText}>{fmtFixed(averageSummary.avgCostPerKm, 2)}</Text>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.avgCostPerDay, 2)}
+                    </Text>
+                  </View>
+                  <View style={[styles.cell, styles.colNum]}>
+                    <Text style={styles.avgText}>
+                      {fmtFixed(averageSummary.avgCostPerKm, 2)}
+                    </Text>
                   </View>
                   {canManageVehicleData && (
                     <View style={[styles.cell, styles.colAction]}>
@@ -1379,7 +1553,8 @@ export default function VehicleExpenseScreen() {
                     const effDate = getEffectiveDate(entry);
                     const isLatest = index === 0;
                     const itemsLabel =
-                      entry.kind === 'maintenance' && entry.purchasedItems.length > 0
+                      entry.kind === 'maintenance' &&
+                      entry.purchasedItems.length > 0
                         ? entry.purchasedItems
                             .map(
                               (p) =>
@@ -1400,7 +1575,9 @@ export default function VehicleExpenseScreen() {
                       >
                         <View style={[styles.cell, styles.colDate]}>
                           <Text style={styles.cellText}>{effDate}</Text>
-                          {isLatest && <Text style={styles.latestBadge}>বর্তমান</Text>}
+                          {isLatest && (
+                            <Text style={styles.latestBadge}>বর্তমান</Text>
+                          )}
                         </View>
                         <View style={[styles.cell, styles.colReading]}>
                           <Text style={styles.cellTextNum}>
@@ -1409,16 +1586,22 @@ export default function VehicleExpenseScreen() {
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
                           <Text style={styles.cellTextNum}>
-                            {entry.fuelLtr > 0 ? fmtFixed(entry.fuelLtr, 2) : '-'}
+                            {entry.fuelLtr > 0
+                              ? fmtFixed(entry.fuelLtr, 2)
+                              : '-'}
                           </Text>
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
                           <Text style={styles.cellTextNum}>
-                            {entry.ratePerLitre > 0 ? fmtFixed(entry.ratePerLitre, 2) : '-'}
+                            {entry.ratePerLitre > 0
+                              ? fmtFixed(entry.ratePerLitre, 2)
+                              : '-'}
                           </Text>
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
-                          <Text style={[styles.cellTextNum, { fontWeight: '700' }]}>
+                          <Text
+                            style={[styles.cellTextNum, { fontWeight: '700' }]}
+                          >
                             {entry.kind === 'fuel' && entry.taka > 0
                               ? fmtFixed(entry.taka, 2)
                               : '-'}
@@ -1437,7 +1620,8 @@ export default function VehicleExpenseScreen() {
                           )}
                         </View>
                         <View style={[styles.cell, styles.colItem]}>
-                          {entry.kind === 'maintenance' && itemsTotalCost > 0 ? (
+                          {entry.kind === 'maintenance' &&
+                          itemsTotalCost > 0 ? (
                             <Text style={styles.cellTextLeft} numberOfLines={2}>
                               {itemsLabel}
                             </Text>
@@ -1446,7 +1630,9 @@ export default function VehicleExpenseScreen() {
                           )}
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
-                          <Text style={styles.cellTextNum}>{fmtFixed(row.usage, 2)}</Text>
+                          <Text style={styles.cellTextNum}>
+                            {fmtFixed(row.usage, 2)}
+                          </Text>
                         </View>
                         <View style={[styles.cell, styles.colDays]}>
                           <Text style={styles.cellTextNum}>
@@ -1454,24 +1640,50 @@ export default function VehicleExpenseScreen() {
                           </Text>
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
-                          <Text style={styles.cellTextNum}>{fmtFixed(row.kmPerDay, 2)}</Text>
+                          <Text style={styles.cellTextNum}>
+                            {fmtFixed(row.kmPerDay, 2)}
+                          </Text>
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
-                          <Text style={styles.cellTextNum}>{fmtFixed(row.mileage, 2)}</Text>
+                          <Text style={styles.cellTextNum}>
+                            {fmtFixed(row.mileage, 2)}
+                          </Text>
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
-                          <Text style={styles.cellTextNum}>{fmtFixed(row.costPerDay, 2)}</Text>
+                          <Text style={styles.cellTextNum}>
+                            {fmtFixed(row.costPerDay, 2)}
+                          </Text>
                         </View>
                         <View style={[styles.cell, styles.colNum]}>
-                          <Text style={styles.cellTextNum}>{fmtFixed(row.costPerKm, 2)}</Text>
+                          <Text style={styles.cellTextNum}>
+                            {fmtFixed(row.costPerKm, 2)}
+                          </Text>
                         </View>
                         {canManageVehicleData && (
-                          <View style={[styles.cell, styles.colAction, styles.actionCell]}>
-                            <TouchableOpacity onPress={() => openEditModal(entry)}>
-                              <Ionicons name="create-outline" size={16} color="#2563EB" />
+                          <View
+                            style={[
+                              styles.cell,
+                              styles.colAction,
+                              styles.actionCell,
+                            ]}
+                          >
+                            <TouchableOpacity
+                              onPress={() => openEditModal(entry)}
+                            >
+                              <Ionicons
+                                name="create-outline"
+                                size={16}
+                                color="#2563EB"
+                              />
                             </TouchableOpacity>
-                            <TouchableOpacity onPress={() => requestDeleteEntry(entry)}>
-                              <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                            <TouchableOpacity
+                              onPress={() => requestDeleteEntry(entry)}
+                            >
+                              <Ionicons
+                                name="trash-outline"
+                                size={16}
+                                color="#DC2626"
+                              />
                             </TouchableOpacity>
                           </View>
                         )}
@@ -1485,35 +1697,46 @@ export default function VehicleExpenseScreen() {
         </>
       )}
 
-      {/* Safe Cancel Pending Finish Modal */}
-      <Modal visible={cancelPendingModalVisible} transparent animationType="fade">
+      <Modal
+        visible={cancelPendingModalVisible}
+        transparent
+        animationType="fade"
+      >
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.deleteHeaderRow}>
-              <Ionicons name="alert-circle-outline" size={22} color="#D97706" />
+              <Ionicons
+                name="alert-circle-outline"
+                size={22}
+                color="#D97706"
+              />
               <Text style={[styles.deleteModalTitle, { color: '#92400E' }]}>
                 Pending Finish Reading বাতিল করবেন?
               </Text>
             </View>
             <Text style={styles.deleteWarningText}>
-              ভুল চাপে যেন মুছে না যায় সেজন্য নিশ্চিত করুন। বাতিল করলে সেভ করা Finish Reading ({activePendingFuel?.reading} km) মুছে যাবে।
+              ভুল চাপে যেন মুছে না যায় সেজন্য নিশ্চিত করুন। বাতিল করলে সেভ করা
+              Finish Reading ({activePendingFuel?.reading} km) মুছে যাবে।
             </Text>
             <View style={styles.modalActions}>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={closeCancelPendingModal}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>রাখুন</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  রাখুন
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 disabled={cancelPendingCooldown > 0}
                 style={[
                   styles.modalBtn,
                   {
-                    backgroundColor: cancelPendingCooldown > 0 ? '#FCD34D' : '#D97706',
+                    backgroundColor:
+                      cancelPendingCooldown > 0 ? '#FCD34D' : '#D97706',
                   },
                 ]}
-                onPress={handleConfirmClearPendingFinish}
+                onPress={() => void handleConfirmClearPendingFinish()}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
                   {cancelPendingCooldown > 0
@@ -1526,11 +1749,12 @@ export default function VehicleExpenseScreen() {
         </View>
       </Modal>
 
-      {/* Date Picker Modal */}
       <Modal visible={datePickerVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>📅 তারিখ নির্বাচন করুন (DD/MM/YYYY)</Text>
+            <Text style={styles.modalTitle}>
+              📅 তারিখ নির্বাচন করুন (DD/MM/YYYY)
+            </Text>
 
             <View style={styles.pickerColsRow}>
               <View style={styles.pickerCol}>
@@ -1539,7 +1763,10 @@ export default function VehicleExpenseScreen() {
                   {pickerDaysArray.map((d) => (
                     <TouchableOpacity
                       key={d}
-                      style={[styles.pickerOption, pickerDay === d && styles.pickerOptionActive]}
+                      style={[
+                        styles.pickerOption,
+                        pickerDay === d && styles.pickerOptionActive,
+                      ]}
                       onPress={() => setPickerDay(d)}
                     >
                       <Text
@@ -1561,7 +1788,10 @@ export default function VehicleExpenseScreen() {
                   {pickerMonthsArray.map((m) => (
                     <TouchableOpacity
                       key={m}
-                      style={[styles.pickerOption, pickerMonth === m && styles.pickerOptionActive]}
+                      style={[
+                        styles.pickerOption,
+                        pickerMonth === m && styles.pickerOptionActive,
+                      ]}
                       onPress={() => setPickerMonth(m)}
                     >
                       <Text
@@ -1583,7 +1813,10 @@ export default function VehicleExpenseScreen() {
                   {pickerYearsArray.map((y) => (
                     <TouchableOpacity
                       key={y}
-                      style={[styles.pickerOption, pickerYear === y && styles.pickerOptionActive]}
+                      style={[
+                        styles.pickerOption,
+                        pickerYear === y && styles.pickerOptionActive,
+                      ]}
                       onPress={() => setPickerYear(y)}
                     >
                       <Text
@@ -1605,30 +1838,39 @@ export default function VehicleExpenseScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setDatePickerVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বাতিল
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
                 onPress={handleConfirmPickedDate}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>তারিখ বসান</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                  তারিখ বসান
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Fuel Finish Reading Modal */}
       <Modal visible={finishModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={styles.modalCard}>
-            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              <Text style={styles.modalTitle}>⏱ Fuel Finish Reading সেভ করুন</Text>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              <Text style={styles.modalTitle}>
+                ⏱ Fuel Finish Reading সেভ করুন
+              </Text>
               <Text style={styles.helperNote}>
-                তেল শেষ হওয়ার Date ও Reading সেভ করে রাখুন। পরে "+ Fuel (Load)" খুললে Date ও Reading দুটোই অটো বসে যাবে।
+                তেল শেষ হওয়ার Date ও Reading সেভ করে রাখুন। পরে &ldquo;+ Fuel
+                (Load)&rdquo; খুললে Date ও Reading দুটোই অটো বসে যাবে।
               </Text>
 
               <Text style={styles.label}>Date (DD/MM/YYYY)</Text>
@@ -1643,12 +1885,18 @@ export default function VehicleExpenseScreen() {
                   style={styles.pickDateBtn}
                   onPress={() => openDatePicker('finish', finishDateInput)}
                 >
-                  <Ionicons name="calendar-outline" size={16} color="#1D4ED8" />
+                  <Ionicons
+                    name="calendar-outline"
+                    size={16}
+                    color="#1D4ED8"
+                  />
                   <Text style={styles.pickDateBtnText}>Pick Date</Text>
                 </TouchableOpacity>
               </View>
 
-              <Text style={[styles.label, { marginTop: 12 }]}>Meter Reading (0 বা তার বেশি) *</Text>
+              <Text style={[styles.label, { marginTop: 12 }]}>
+                Meter Reading (0 বা তার বেশি) *
+              </Text>
               <TextInput
                 style={styles.input}
                 keyboardType="numeric"
@@ -1670,13 +1918,17 @@ export default function VehicleExpenseScreen() {
                   style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                   onPress={() => setFinishModalVisible(false)}
                 >
-                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>
+                    বাতিল
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#D97706' }]}
-                  onPress={handleSaveFinishReading}
+                  onPress={() => void handleSaveFinishReading()}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Reading সেভ করুন</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                    Reading সেভ করুন
+                  </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
@@ -1684,14 +1936,16 @@ export default function VehicleExpenseScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Add Vehicle Modal */}
       <Modal visible={vehicleModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         >
           <View style={styles.modalCard}>
-            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
               <Text style={styles.modalTitle}>
                 {editingVehicleId ? 'Edit Vehicle' : 'নতুন Vehicle যোগ করুন'}
               </Text>
@@ -1714,7 +1968,12 @@ export default function VehicleExpenseScreen() {
                       style={[styles.catChip, active && styles.catChipActive]}
                       onPress={() => setVehCategoryInput(cat)}
                     >
-                      <Text style={[styles.catChipText, active && styles.catChipTextActive]}>
+                      <Text
+                        style={[
+                          styles.catChipText,
+                          active && styles.catChipTextActive,
+                        ]}
+                      >
                         {cat}
                       </Text>
                     </TouchableOpacity>
@@ -1747,11 +2006,13 @@ export default function VehicleExpenseScreen() {
                   style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                   onPress={() => setVehicleModalVisible(false)}
                 >
-                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>
+                    বাতিল
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                  onPress={handleSaveVehicle}
+                  onPress={() => void handleSaveVehicle()}
                 >
                   <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
                     {editingVehicleId ? 'Save Vehicle' : 'Vehicle যোগ করুন'}
@@ -1763,17 +2024,19 @@ export default function VehicleExpenseScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Safe Delete Confirmation Modal */}
       <Modal visible={deleteTarget !== null} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.deleteHeaderRow}>
               <Ionicons name="warning-outline" size={22} color="#DC2626" />
-              <Text style={styles.deleteModalTitle}>ডিলিট নিশ্চিতকরণ (সতর্কতা)</Text>
+              <Text style={styles.deleteModalTitle}>
+                ডিলিট নিশ্চিতকরণ (সতর্কতা)
+              </Text>
             </View>
 
             <Text style={styles.deleteWarningText}>
-              এই এন্ট্রিটি মুছে ফেললে হিসাবের Usage, Days ও গড় মান পরিবর্তন হতে পারে এবং এটি ফিরিয়ে আনা যাবে না।
+              এই এন্ট্রিটি মুছে ফেললে হিসাবের Usage, Days ও গড় মান পরিবর্তন হতে
+              পারে এবং এটি ফিরিয়ে আনা যাবে না।
             </Text>
 
             {deleteTarget && (
@@ -1800,7 +2063,10 @@ export default function VehicleExpenseScreen() {
                       সার্ভিস + পার্টস: ৳
                       {(
                         deleteTarget.serviceCharge +
-                        (deleteTarget.purchasedItems || []).reduce((s, p) => s + p.price, 0)
+                        (deleteTarget.purchasedItems || []).reduce(
+                          (s, p) => s + p.price,
+                          0
+                        )
                       ).toFixed(2)}
                     </Text>
                   </>
@@ -1827,7 +2093,9 @@ export default function VehicleExpenseScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={closeDeleteModal}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বাতিল
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -1838,10 +2106,12 @@ export default function VehicleExpenseScreen() {
                     backgroundColor: canConfirmDelete ? '#DC2626' : '#FCA5A5',
                   },
                 ]}
-                onPress={confirmDeleteEntry}
+                onPress={() => void confirmDeleteEntry()}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
-                  {deleteCooldown > 0 ? `অপেক্ষা করুন (${deleteCooldown}s)` : 'স্থায়ীভাবে ডিলিট'}
+                  {deleteCooldown > 0
+                    ? `অপেক্ষা করুন (${deleteCooldown}s)`
+                    : 'স্থায়ীভাবে ডিলিট'}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1849,7 +2119,6 @@ export default function VehicleExpenseScreen() {
         </View>
       </Modal>
 
-      {/* Add / Edit Entry Modal */}
       <Modal visible={modalVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
@@ -1878,7 +2147,12 @@ export default function VehicleExpenseScreen() {
                     style={[styles.kindBtn, kind === k.id && styles.kindBtnActive]}
                     onPress={() => setKind(k.id)}
                   >
-                    <Text style={[styles.kindBtnText, kind === k.id && styles.kindBtnTextActive]}>
+                    <Text
+                      style={[
+                        styles.kindBtnText,
+                        kind === k.id && styles.kindBtnTextActive,
+                      ]}
+                    >
                       {k.label}
                     </Text>
                   </TouchableOpacity>
@@ -1889,7 +2163,8 @@ export default function VehicleExpenseScreen() {
                 <>
                   {!editingId && activePendingFuel && (
                     <Text style={styles.autoFillNote}>
-                      ✓ Finish Reading ({activePendingFuel.reading} km) ও Date ({activePendingFuel.date}) অটো বসানো হয়েছে।
+                      ✓ Finish Reading ({activePendingFuel.reading} km) ও Date (
+                      {activePendingFuel.date}) অটো বসানো হয়েছে।
                     </Text>
                   )}
 
@@ -1905,12 +2180,18 @@ export default function VehicleExpenseScreen() {
                       style={styles.pickDateBtn}
                       onPress={() => openDatePicker('entry', dateInput)}
                     >
-                      <Ionicons name="calendar-outline" size={16} color="#1D4ED8" />
+                      <Ionicons
+                        name="calendar-outline"
+                        size={16}
+                        color="#1D4ED8"
+                      />
                       <Text style={styles.pickDateBtnText}>Pick Date</Text>
                     </TouchableOpacity>
                   </View>
 
-                  <Text style={[styles.label, { marginTop: 12 }]}>Reading (0 বা তার বেশি)</Text>
+                  <Text style={[styles.label, { marginTop: 12 }]}>
+                    Reading (0 বা তার বেশি)
+                  </Text>
                   <TextInput
                     style={styles.input}
                     keyboardType="numeric"
@@ -1973,12 +2254,18 @@ export default function VehicleExpenseScreen() {
                       style={styles.pickDateBtn}
                       onPress={() => openDatePicker('entry', dateInput)}
                     >
-                      <Ionicons name="calendar-outline" size={16} color="#1D4ED8" />
+                      <Ionicons
+                        name="calendar-outline"
+                        size={16}
+                        color="#1D4ED8"
+                      />
                       <Text style={styles.pickDateBtnText}>Pick Date</Text>
                     </TouchableOpacity>
                   </View>
 
-                  <Text style={[styles.label, { marginTop: 12 }]}>Service Name</Text>
+                  <Text style={[styles.label, { marginTop: 12 }]}>
+                    Service Name
+                  </Text>
                   <TextInput
                     style={styles.input}
                     value={serviceNameInput}
@@ -2005,13 +2292,16 @@ export default function VehicleExpenseScreen() {
                           style={styles.addItemBtn}
                           onPress={() => setShowItemSubForm(true)}
                         >
-                          <Ionicons name="add-circle-outline" size={16} color="#FFFFFF" />
+                          <Ionicons
+                            name="add-circle-outline"
+                            size={16}
+                            color="#FFFFFF"
+                          />
                           <Text style={styles.addItemBtnText}>Add Item</Text>
                         </TouchableOpacity>
                       )}
                     </View>
 
-                    {/* Saved Item Memory List - Tap anywhere to auto-fill */}
                     {savedItemMemory.length > 0 && (
                       <View style={styles.memoryBox}>
                         <Text style={styles.memoryTitle}>
@@ -2032,7 +2322,11 @@ export default function VehicleExpenseScreen() {
                                 Qty: {tpl.quantity} • ৳{tpl.price.toFixed(2)}
                               </Text>
                             </View>
-                            <Ionicons name="arrow-down-circle-outline" size={18} color="#1D4ED8" />
+                            <Ionicons
+                              name="arrow-down-circle-outline"
+                              size={18}
+                              color="#1D4ED8"
+                            />
                           </TouchableOpacity>
                         ))}
                       </View>
@@ -2048,8 +2342,14 @@ export default function VehicleExpenseScreen() {
                             Qty: {part.quantity} • Price: ৳{part.price.toFixed(2)}
                           </Text>
                         </View>
-                        <TouchableOpacity onPress={() => handleRemoveServiceItem(part.id)}>
-                          <Ionicons name="close-circle" size={20} color="#DC2626" />
+                        <TouchableOpacity
+                          onPress={() => handleRemoveServiceItem(part.id)}
+                        >
+                          <Ionicons
+                            name="close-circle"
+                            size={20}
+                            color="#DC2626"
+                          />
                         </TouchableOpacity>
                       </View>
                     ))}
@@ -2099,18 +2399,36 @@ export default function VehicleExpenseScreen() {
 
                         <View style={styles.subFormActions}>
                           <TouchableOpacity
-                            style={[styles.smallBtn, { backgroundColor: '#E2E8F0' }]}
+                            style={[
+                              styles.smallBtn,
+                              { backgroundColor: '#E2E8F0' },
+                            ]}
                             onPress={resetItemSubForm}
                           >
-                            <Text style={{ color: '#334155', fontWeight: '600', fontSize: 12 }}>
+                            <Text
+                              style={{
+                                color: '#334155',
+                                fontWeight: '600',
+                                fontSize: 12,
+                              }}
+                            >
                               বাতিল
                             </Text>
                           </TouchableOpacity>
                           <TouchableOpacity
-                            style={[styles.smallBtn, { backgroundColor: '#16A34A' }]}
-                            onPress={handleAddServiceItem}
+                            style={[
+                              styles.smallBtn,
+                              { backgroundColor: '#16A34A' },
+                            ]}
+                            onPress={() => void handleAddServiceItem()}
                           >
-                            <Text style={{ color: '#FFFFFF', fontWeight: '700', fontSize: 12 }}>
+                            <Text
+                              style={{
+                                color: '#FFFFFF',
+                                fontWeight: '700',
+                                fontSize: 12,
+                              }}
+                            >
                               Item যোগ করুন
                             </Text>
                           </TouchableOpacity>
@@ -2119,9 +2437,14 @@ export default function VehicleExpenseScreen() {
                     )}
 
                     <View style={styles.serviceTotalBar}>
-                      <Text style={styles.serviceTotalLabel}>সর্বমোট Servicing + Item:</Text>
+                      <Text style={styles.serviceTotalLabel}>
+                        সর্বমোট Servicing + Item:
+                      </Text>
                       <Text style={styles.serviceTotalValue}>
-                        ৳{(parseNum(servicePriceInput) + serviceItemsTotal).toFixed(2)}
+                        ৳
+                        {(
+                          parseNum(servicePriceInput) + serviceItemsTotal
+                        ).toFixed(2)}
                       </Text>
                     </View>
                   </View>
@@ -2133,13 +2456,17 @@ export default function VehicleExpenseScreen() {
                   style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                   onPress={() => setModalVisible(false)}
                 >
-                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>
+                    বাতিল
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                  onPress={handleSave}
+                  onPress={() => void handleSave()}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>সেভ করুন</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                    সেভ করুন
+                  </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>

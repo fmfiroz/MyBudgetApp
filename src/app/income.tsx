@@ -4,24 +4,23 @@ import * as Print from 'expo-print';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { saveLocalData } from '../utils/firebaseSync';
 import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  SafeAreaView,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  useWindowDimensions,
-  View,
+    ActivityIndicator,
+    Alert,
+    KeyboardAvoidingView,
+    Modal,
+    Platform,
+    SafeAreaView,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    useWindowDimensions,
+    View,
 } from 'react-native';
+import { saveLocalData } from '../utils/firebaseSync';
 
-// Income Year: July থেকে Next Year June পর্যন্ত ১২ মাস
 const FISCAL_MONTHS = [
   'July',
   'August',
@@ -59,8 +58,8 @@ interface IncomeRow {
 
 interface DailyIncomeEntry {
   id: string;
-  date: string; // YYYY-MM-DD
-  month: string; // Fiscal Month name
+  date: string;
+  month: string;
   source: string;
   amount: number;
   note?: string;
@@ -130,7 +129,10 @@ const getTodayIsoDate = (): string => {
   return `${y}-${m}-${d}`;
 };
 
-const buildDefaultCells = (mode: CellMode, val: number): { [month: string]: CellConfig } => {
+const buildDefaultCells = (
+  mode: CellMode,
+  val: number
+): { [month: string]: CellConfig } => {
   const obj: { [month: string]: CellConfig } = {};
   FISCAL_MONTHS.forEach((m) => {
     obj[m] = { mode, value: parseNumericValue(val) };
@@ -217,8 +219,6 @@ const createSalarySheetRows = (
       type: 'income',
       cells: buildDefaultCells('fixed', 0),
     },
-
-    // Deductions
     {
       id: 'row-pf-self-inst',
       description: 'P.F (Self+Institute Contribution)',
@@ -354,7 +354,6 @@ const normalizeRow = (r: any): IncomeRow => {
   };
 };
 
-// পুরোনো সেভ করা Salary শিটে নতুন Arrear Allow. ও Previous Paid Allowance না থাকলে যুক্ত করে নেওয়া
 const ensureSalarySystemRows = (rows: IncomeRow[]): IncomeRow[] => {
   const hasArrear = rows.some((r) => r.id === 'row-arrear-allow');
   const hasPrevPaid = rows.some((r) => r.id === 'row-prev-paid-allowance');
@@ -442,11 +441,9 @@ const parseYearStore = (raw: string | null): FiscalYearStore => {
   return EMPTY_YEAR_STORE;
 };
 
-/**
- * একাধিক আয়ের উৎস থাকলে নির্দিষ্ট অর্থবছরের সব শিটের সম্মিলিত মাসিক ও বার্ষিক আয় বের করার হেল্পার
- * (Budget ও Savings পেজের সাথে সমন্বয়ের জন্য)
- */
-export async function getCombinedIncomeSummaryForFiscalYear(startYear: number): Promise<{
+export async function getCombinedIncomeSummaryForFiscalYear(
+  startYear: number
+): Promise<{
   byMonth: { [month: string]: number };
   yearlyTotal: number;
 }> {
@@ -456,7 +453,9 @@ export async function getCombinedIncomeSummaryForFiscalYear(startYear: number): 
   });
 
   try {
-    const raw = await AsyncStorage.getItem(`@income_fy_${startYear}_${startYear + 1}`);
+    const raw = await AsyncStorage.getItem(
+      `@income_fy_${startYear}_${startYear + 1}`
+    );
     const parsedStore = parseYearStore(raw);
 
     for (const sheet of parsedStore.sheets) {
@@ -468,10 +467,14 @@ export async function getCombinedIncomeSummaryForFiscalYear(startYear: number): 
         });
       } else {
         const basicRow = sheet.rows.find(
-          (r) => !r.hidden && (r.isBasic || r.description.trim().toLowerCase() === 'net basic')
+          (r) =>
+            !r.hidden &&
+            (r.isBasic || r.description.trim().toLowerCase() === 'net basic')
         );
         FISCAL_MONTHS.forEach((m) => {
-          const basicVal = basicRow ? parseNumericValue(basicRow.cells?.[m]?.value) : 0;
+          const basicVal = basicRow
+            ? parseNumericValue(basicRow.cells?.[m]?.value)
+            : 0;
           let monthNet = 0;
           sheet.rows.forEach((row) => {
             if (row.hidden) return;
@@ -494,7 +497,10 @@ export async function getCombinedIncomeSummaryForFiscalYear(startYear: number): 
     console.log('Combined income summary error:', e);
   }
 
-  const yearlyTotal = FISCAL_MONTHS.reduce((sum, m) => sum + (byMonth[m] || 0), 0);
+  const yearlyTotal = FISCAL_MONTHS.reduce(
+    (sum, m) => sum + (byMonth[m] || 0),
+    0
+  );
   return { byMonth, yearlyTotal };
 }
 
@@ -510,10 +516,16 @@ export default function IncomeSheetScreen() {
   const visibleColumnsCount = isMobileScreen
     ? 2
     : Math.max(4, Math.floor((screenWidth - 215) / 114));
-  const rawRightWidth = Math.max(200, Math.floor(screenWidth - (isMobileScreen ? 136 : 215)));
+  const rawRightWidth = Math.max(
+    200,
+    Math.floor(screenWidth - (isMobileScreen ? 136 : 215))
+  );
   const monthColWidth = Math.floor(rawRightWidth / visibleColumnsCount);
   const exactRightViewportWidth = monthColWidth * visibleColumnsCount;
-  const descColWidth = Math.max(120, Math.floor(screenWidth) - exactRightViewportWidth);
+  const descColWidth = Math.max(
+    120,
+    Math.floor(screenWidth) - exactRightViewportWidth
+  );
 
   const gridSnapOffsets = useMemo(() => {
     const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
@@ -533,15 +545,17 @@ export default function IncomeSheetScreen() {
     return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
   };
 
-  const [fiscalStartYear, setFiscalStartYear] = useState<number>(getInitialFiscalStartYear);
+  const [fiscalStartYear, setFiscalStartYear] = useState<number>(
+    getInitialFiscalStartYear
+  );
   const [store, setStore] = useState<FiscalYearStore>(EMPTY_YEAR_STORE);
   const [exportingPdf, setExportingPdf] = useState<boolean>(false);
 
-  const [pdfActionModalVisible, setPdfActionModalVisible] = useState<boolean>(false);
+  const [pdfActionModalVisible, setPdfActionModalVisible] =
+    useState<boolean>(false);
   const [generatedHtml, setGeneratedHtml] = useState<string>('');
   const [hiddenModalVisible, setHiddenModalVisible] = useState(false);
 
-  // প্রশ্নমালা / Add Income Sheet Wizard Modal স্টেট
   const [incomeWizardVisible, setIncomeWizardVisible] = useState<boolean>(false);
   const [wizardKind, setWizardKind] = useState<IncomeProfileKind>('salary');
   const [wizardTitle, setWizardTitle] = useState<string>('');
@@ -550,19 +564,19 @@ export default function IncomeSheetScreen() {
   const [wizardApplyAllMonths, setWizardApplyAllMonths] = useState<boolean>(true);
   const [wizardStartMonth, setWizardStartMonth] = useState<string>('July');
 
-  // Strict Sheet Delete Confirmation Modal স্টেট
-  const [deleteSheetTarget, setDeleteSheetTarget] = useState<IncomeSheetProfile | null>(null);
+  const [deleteSheetTarget, setDeleteSheetTarget] =
+    useState<IncomeSheetProfile | null>(null);
   const [deleteSheetChecked, setDeleteSheetChecked] = useState<boolean>(false);
   const [deleteSheetTypedText, setDeleteSheetTypedText] = useState<string>('');
 
-  // Daily Income এন্ট্রি ফর্ম স্টেট
-  const [dailySelectedMonth, setDailySelectedMonth] = useState<string>(getCurrentFiscalMonthName());
+  const [dailySelectedMonth, setDailySelectedMonth] = useState<string>(
+    getCurrentFiscalMonthName()
+  );
   const [dailyDateInput, setDailyDateInput] = useState<string>(getTodayIsoDate());
   const [dailySourceInput, setDailySourceInput] = useState<string>('');
   const [dailyAmountInput, setDailyAmountInput] = useState<string>('');
   const [dailyNoteInput, setDailyNoteInput] = useState<string>('');
 
-  // নতুন খাত যোগ করার মোডাল স্টেট
   const [addModalVisible, setAddModalVisible] = useState(false);
   const [newDesc, setNewDesc] = useState('');
   const [newType, setNewType] = useState<ItemType>('income');
@@ -571,7 +585,6 @@ export default function IncomeSheetScreen() {
   const [applyToAllMonths, setApplyToAllMonths] = useState(false);
   const [selectedStartMonth, setSelectedStartMonth] = useState<string>('July');
 
-  // Cell Edit Modal
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editingRow, setEditingRow] = useState<IncomeRow | null>(null);
   const [editingMonth, setEditingMonth] = useState<string>('July');
@@ -584,10 +597,15 @@ export default function IncomeSheetScreen() {
 
   const activeSheet = useMemo<IncomeSheetProfile | null>(() => {
     if (!store.initialized || store.sheets.length === 0) return null;
-    return store.sheets.find((s) => s.id === store.activeSheetId) || store.sheets[0];
+    return (
+      store.sheets.find((s) => s.id === store.activeSheetId) || store.sheets[0]
+    );
   }, [store]);
 
-  const rows = useMemo<IncomeRow[]>(() => activeSheet?.rows || [], [activeSheet]);
+  const rows = useMemo<IncomeRow[]>(
+    () => activeSheet?.rows || [],
+    [activeSheet]
+  );
 
   const snapToGridIndex = useCallback(
     (targetIdx: number, animated = true) => {
@@ -607,22 +625,21 @@ export default function IncomeSheetScreen() {
       try {
         const saved = await AsyncStorage.getItem(getStorageKey(fiscalStartYear));
         setStore(parseYearStore(saved));
-        // অর্থবছর লোড হলে সবসময় July (index 0) থেকে শুরু দেখাবে
         setTimeout(() => snapToGridIndex(0, false), 50);
       } catch (e) {
         console.log('Failed to load income year sheet:', e);
         setStore(EMPTY_YEAR_STORE);
       }
     };
-    loadData();
+    void loadData();
   }, [fiscalStartYear, snapToGridIndex]);
 
   const persistStore = useCallback(
     async (startYr: number, nextStore: FiscalYearStore) => {
-      if (startYr === fiscalStartYear) {
-        setStore(nextStore);
-      }
       try {
+        if (startYr === fiscalStartYear) {
+          setStore(nextStore);
+        }
         await saveLocalData(getStorageKey(startYr), nextStore);
       } catch (e) {
         console.log('Failed to save income year store:', e);
@@ -633,23 +650,27 @@ export default function IncomeSheetScreen() {
 
   const saveRowsForActiveSheet = useCallback(
     async (startYr: number, updatedRows: IncomeRow[]) => {
-      const currentRaw = await AsyncStorage.getItem(getStorageKey(startYr));
-      const baseStore =
-        startYr === fiscalStartYear ? store : parseYearStore(currentRaw);
+      try {
+        const currentRaw = await AsyncStorage.getItem(getStorageKey(startYr));
+        const baseStore =
+          startYr === fiscalStartYear ? store : parseYearStore(currentRaw);
 
-      if (!baseStore.sheets.length) return;
-      const targetSheetId = baseStore.activeSheetId || baseStore.sheets[0].id;
+        if (!baseStore.sheets.length) return;
+        const targetSheetId = baseStore.activeSheetId || baseStore.sheets[0].id;
 
-      const updatedSheets = baseStore.sheets.map((s) =>
-        s.id === targetSheetId ? { ...s, rows: updatedRows } : s
-      );
+        const updatedSheets = baseStore.sheets.map((s) =>
+          s.id === targetSheetId ? { ...s, rows: updatedRows } : s
+        );
 
-      await persistStore(startYr, {
-        ...baseStore,
-        initialized: true,
-        activeSheetId: targetSheetId,
-        sheets: updatedSheets,
-      });
+        await persistStore(startYr, {
+          ...baseStore,
+          initialized: true,
+          activeSheetId: targetSheetId,
+          sheets: updatedSheets,
+        });
+      } catch (e) {
+        console.log('Failed to save income sheet rows:', e);
+      }
     },
     [fiscalStartYear, persistStore, store]
   );
@@ -659,7 +680,7 @@ export default function IncomeSheetScreen() {
       setDailySelectedMonth(getCurrentFiscalMonthName());
       return;
     }
-    snapToGridIndex(0, true); // সবসময় July (July-June ক্রমের শুরু)-তে নিয়ে যাবে
+    snapToGridIndex(0, true);
   };
 
   const scheduleGridSnapFromOffset = useCallback(
@@ -671,7 +692,10 @@ export default function IncomeSheetScreen() {
         if (monthColWidth <= 0) return;
         const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
         const rawRatio = offsetX / monthColWidth;
-        const targetIdx = Math.max(0, Math.min(maxStartIndex, Math.round(rawRatio)));
+        const targetIdx = Math.max(
+          0,
+          Math.min(maxStartIndex, Math.round(rawRatio))
+        );
         setActiveGridIndex(targetIdx);
 
         const exactTargetX = targetIdx * monthColWidth;
@@ -705,7 +729,8 @@ export default function IncomeSheetScreen() {
   const getBasicForMonth = useCallback(
     (month: string): number => {
       const basicRow = rows.find(
-        (r) => r.isBasic || r.description.trim().toLowerCase() === 'net basic'
+        (r) =>
+          r.isBasic || r.description.trim().toLowerCase() === 'net basic'
       );
       if (!basicRow || basicRow.hidden) return 0;
       return parseNumericValue(basicRow.cells?.[month]?.value);
@@ -837,7 +862,6 @@ export default function IncomeSheetScreen() {
     await persistStore(fiscalStartYear, nextStore);
     setIncomeWizardVisible(false);
 
-    // Salary বা যেকোনো টেবিল শিট তৈরির পর সবসময় July (index 0) থেকে শুরু হবে
     setTimeout(() => {
       snapToGridIndex(0, false);
     }, 60);
@@ -854,19 +878,23 @@ export default function IncomeSheetScreen() {
     }, 50);
   };
 
-  // Strict Delete Sheet চেক ও এক্সিকিউশন
   const canConfirmStrictSheetDelete = useMemo(() => {
     if (!deleteSheetTarget || !deleteSheetChecked) return false;
     const typed = deleteSheetTypedText.trim().toLowerCase();
     const targetName = deleteSheetTarget.title.trim().toLowerCase();
-    return typed === 'delete' || (targetName.length > 0 && typed === targetName);
+    return (
+      typed === 'delete' || (targetName.length > 0 && typed === targetName)
+    );
   }, [deleteSheetTarget, deleteSheetChecked, deleteSheetTypedText]);
 
   const handleConfirmStrictSheetDelete = async () => {
     if (!deleteSheetTarget || !canConfirmStrictSheetDelete) return;
 
-    const remainingSheets = store.sheets.filter((s) => s.id !== deleteSheetTarget.id);
-    const nextActiveId = remainingSheets.length > 0 ? remainingSheets[0].id : null;
+    const remainingSheets = store.sheets.filter(
+      (s) => s.id !== deleteSheetTarget.id
+    );
+    const nextActiveId =
+      remainingSheets.length > 0 ? remainingSheets[0].id : null;
 
     const nextStore: FiscalYearStore = {
       initialized: remainingSheets.length > 0,
@@ -881,7 +909,6 @@ export default function IncomeSheetScreen() {
     setDeleteSheetTypedText('');
   };
 
-  // Daily Income এন্ট্রি যোগ ও ডিলিট
   const handleAddDailyEntry = async () => {
     if (!activeSheet || activeSheet.kind !== 'daily') return;
     const amount = parseNumericValue(dailyAmountInput);
@@ -935,7 +962,9 @@ export default function IncomeSheetScreen() {
   };
 
   const handleToggleHideRow = async (rowId: string, hideValue: boolean) => {
-    const updated = rows.map((r) => (r.id === rowId ? { ...r, hidden: hideValue } : r));
+    const updated = rows.map((r) =>
+      r.id === rowId ? { ...r, hidden: hideValue } : r
+    );
     await saveRowsForActiveSheet(fiscalStartYear, updated);
   };
 
@@ -955,7 +984,8 @@ export default function IncomeSheetScreen() {
     if (!editingRow) return;
     const numVal = parseNumericValue(editValue);
     const startIdx = FISCAL_MONTHS.indexOf(editingMonth);
-    const effectiveMode: CellMode = editingRow.isBasic || !isSalarySheet ? 'fixed' : editMode;
+    const effectiveMode: CellMode =
+      editingRow.isBasic || !isSalarySheet ? 'fixed' : editMode;
     const shouldApplyForward = isSalarySheet && applyForward;
 
     const updated = rows.map((row) => {
@@ -964,7 +994,10 @@ export default function IncomeSheetScreen() {
 
       if (shouldApplyForward && startIdx >= 0) {
         for (let i = startIdx; i < FISCAL_MONTHS.length; i++) {
-          updatedCells[FISCAL_MONTHS[i]] = { mode: effectiveMode, value: numVal };
+          updatedCells[FISCAL_MONTHS[i]] = {
+            mode: effectiveMode,
+            value: numVal,
+          };
         }
       } else {
         updatedCells[editingMonth] = { mode: effectiveMode, value: numVal };
@@ -975,11 +1008,12 @@ export default function IncomeSheetScreen() {
 
     await saveRowsForActiveSheet(fiscalStartYear, updated);
 
-    // Basic সেলে July থেকে applyForward করলে পরের অর্থবছরের Jan-Jun সিঙ্ক
     if (editingRow.isBasic && editingMonth === 'July' && shouldApplyForward) {
       const nextFiscalStartYear = fiscalStartYear + 1;
       try {
-        const nextRaw = await AsyncStorage.getItem(getStorageKey(nextFiscalStartYear));
+        const nextRaw = await AsyncStorage.getItem(
+          getStorageKey(nextFiscalStartYear)
+        );
         const nextStore = parseYearStore(nextRaw);
         if (nextStore.sheets.length > 0) {
           const syncedSheets = nextStore.sheets.map((s) => {
@@ -1011,7 +1045,10 @@ export default function IncomeSheetScreen() {
 
   const handleAddRow = async () => {
     if (!newDesc.trim()) {
-      Alert.alert('তথ্য অসম্পূর্ণ', 'অনুগ্রহ করে খাতের বিবরণ (Description) লিখুন।');
+      Alert.alert(
+        'তথ্য অসম্পূর্ণ',
+        'অনুগ্রহ করে খাতের বিবরণ (Description) লিখুন।'
+      );
       return;
     }
 
@@ -1024,7 +1061,10 @@ export default function IncomeSheetScreen() {
       if (effectiveApplyAll) {
         cells[m] = { mode: effectiveMode, value: numVal };
       } else {
-        cells[m] = { mode: effectiveMode, value: m === selectedStartMonth ? numVal : 0 };
+        cells[m] = {
+          mode: effectiveMode,
+          value: m === selectedStartMonth ? numVal : 0,
+        };
       }
     });
 
@@ -1043,11 +1083,14 @@ export default function IncomeSheetScreen() {
     setAddModalVisible(false);
   };
 
-  const visibleIncomeRows = rows.filter((r) => r.type === 'income' && !r.hidden);
-  const visibleDeductionRows = rows.filter((r) => r.type === 'deduction' && !r.hidden);
+  const visibleIncomeRows = rows.filter(
+    (r) => r.type === 'income' && !r.hidden
+  );
+  const visibleDeductionRows = rows.filter(
+    (r) => r.type === 'deduction' && !r.hidden
+  );
   const hiddenRows = rows.filter((r) => r.hidden);
 
-  // Daily Sheet হিসাব
   const dailyEntriesForSheet = useMemo(
     () => (activeSheet?.kind === 'daily' ? activeSheet.dailyEntries || [] : []),
     [activeSheet]
@@ -1120,7 +1163,8 @@ export default function IncomeSheetScreen() {
 
     const getRowAnnualTotal = (row: IncomeRow) => {
       const totalCents = FISCAL_MONTHS.reduce(
-        (sumCents, m) => sumCents + Math.round(getResolvedAmount(row, m) * 100),
+        (sumCents, m) =>
+          sumCents + Math.round(getResolvedAmount(row, m) * 100),
         0
       );
       return totalCents / 100;
@@ -1132,7 +1176,9 @@ export default function IncomeSheetScreen() {
           const annualSum = getRowAnnualTotal(row);
           const monthCols = FISCAL_MONTHS.map((m) => {
             const val = getResolvedAmount(row, m);
-            return `<td style="text-align:right;">${val > 0 ? val.toLocaleString('en-IN') : '-'}</td>`;
+            return `<td style="text-align:right;">${
+              val > 0 ? val.toLocaleString('en-IN') : '-'
+            }</td>`;
           }).join('');
           return `
             <tr>
@@ -1193,7 +1239,9 @@ export default function IncomeSheetScreen() {
               <td style="text-align:left;">Total Payable (Tk.)</td>
               ${FISCAL_MONTHS.map(
                 (m) =>
-                  `<td style="text-align:right;">${monthlySummary[m].totalPayable.toLocaleString('en-IN')}</td>`
+                  `<td style="text-align:right;">${monthlySummary[
+                    m
+                  ].totalPayable.toLocaleString('en-IN')}</td>`
               ).join('')}
               <td style="text-align:right;">${yearlyTotals.annualPayable.toLocaleString('en-IN')}</td>
             </tr>
@@ -1204,7 +1252,9 @@ export default function IncomeSheetScreen() {
               <td style="text-align:left;">Total Deduction (Tk.)</td>
               ${FISCAL_MONTHS.map(
                 (m) =>
-                  `<td style="text-align:right;">${monthlySummary[m].totalDeduction.toLocaleString('en-IN')}</td>`
+                  `<td style="text-align:right;">${monthlySummary[
+                    m
+                  ].totalDeduction.toLocaleString('en-IN')}</td>`
               ).join('')}
               <td style="text-align:right;">${yearlyTotals.annualDeduction.toLocaleString('en-IN')}</td>
             </tr>
@@ -1213,7 +1263,9 @@ export default function IncomeSheetScreen() {
               <td style="text-align:left;">Net Pay (Tk.)</td>
               ${FISCAL_MONTHS.map(
                 (m) =>
-                  `<td style="text-align:right;">${monthlySummary[m].netPay.toLocaleString('en-IN')}</td>`
+                  `<td style="text-align:right;">${monthlySummary[
+                    m
+                  ].netPay.toLocaleString('en-IN')}</td>`
               ).join('')}
               <td style="text-align:right;">${yearlyTotals.annualNetPay.toLocaleString('en-IN')}</td>
             </tr>
@@ -1273,7 +1325,10 @@ export default function IncomeSheetScreen() {
     }
     if (nav?.clipboard?.writeText) {
       await nav.clipboard.writeText(shareText);
-      Alert.alert('কপি হয়েছে', 'রিপোর্টের সারসংক্ষেপ ক্লিপবোর্ডে কপি করা হয়েছে।');
+      Alert.alert(
+        'কপি হয়েছে',
+        'রিপোর্টের সারসংক্ষেপ ক্লিপবোর্ডে কপি করা হয়েছে।'
+      );
     }
   };
 
@@ -1296,12 +1351,18 @@ export default function IncomeSheetScreen() {
             UTI: 'com.adobe.pdf',
           });
         } else {
-          Alert.alert('PDF ডাউনলোড/সেভ হয়েছে', `ফাইলটি সেভ হয়েছে: ${uri}`);
+          Alert.alert(
+            'PDF ডাউনলোড/সেভ হয়েছে',
+            `ফাইলটি সেভ হয়েছে: ${uri}`
+          );
         }
       }
     } catch (error) {
       console.log('PDF export/share error:', error);
-      Alert.alert('সমস্যা হয়েছে', 'PDF রিপোর্ট তৈরি বা ডাউনলোড করা যায়নি।');
+      Alert.alert(
+        'সমস্যা হয়েছে',
+        'PDF রিপোর্ট তৈরি বা ডাউনলোড করা যায়নি।'
+      );
     } finally {
       setExportingPdf(false);
     }
@@ -1322,7 +1383,10 @@ export default function IncomeSheetScreen() {
             styles.cell,
             { width: monthColWidth },
             row.isBasic && styles.basicCellBg,
-            !row.isBasic && cell.mode === 'percent' && cellVal > 0 && styles.percentCellBg,
+            !row.isBasic &&
+              cell.mode === 'percent' &&
+              cellVal > 0 &&
+              styles.percentCellBg,
           ]}
         >
           <Text
@@ -1343,14 +1407,15 @@ export default function IncomeSheetScreen() {
 
   return (
     <SafeAreaView style={styles.safeArea}>
-      {/* Top Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => router.back()} style={styles.backBtn}>
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
         </TouchableOpacity>
         <View style={styles.headerTitleBox}>
           <Text style={styles.headerTitle} numberOfLines={1}>
-            {activeSheet ? `${activeSheet.title} (${fiscalLabel})` : `Income (${fiscalLabel})`}
+            {activeSheet
+              ? `${activeSheet.title} (${fiscalLabel})`
+              : `Income (${fiscalLabel})`}
           </Text>
           <Text style={styles.headerSub} numberOfLines={1}>
             {activeSheet
@@ -1363,7 +1428,10 @@ export default function IncomeSheetScreen() {
 
         {activeSheet && (
           <>
-            <TouchableOpacity style={styles.nowBtn} onPress={handleJumpToStartOrCurrentMonth}>
+            <TouchableOpacity
+              style={styles.nowBtn}
+              onPress={handleJumpToStartOrCurrentMonth}
+            >
               <Text style={styles.nowBtnText}>
                 {activeSheet.kind === 'daily' ? 'Now' : 'July'}
               </Text>
@@ -1371,7 +1439,7 @@ export default function IncomeSheetScreen() {
 
             <TouchableOpacity
               style={styles.pdfBtn}
-              onPress={handleDownloadAndSharePdf}
+              onPress={() => void handleDownloadAndSharePdf()}
               disabled={exportingPdf}
             >
               {exportingPdf ? (
@@ -1397,7 +1465,6 @@ export default function IncomeSheetScreen() {
         </View>
       </View>
 
-      {/* Sheet Switcher + Strict Delete Sheet Button */}
       {store.sheets.length > 0 && (
         <View style={styles.sheetSwitcherBar}>
           <ScrollView
@@ -1411,10 +1478,18 @@ export default function IncomeSheetScreen() {
               return (
                 <TouchableOpacity
                   key={s.id}
-                  style={[styles.sheetTabChip, selected && styles.sheetTabChipActive]}
-                  onPress={() => handleSelectSheet(s.id)}
+                  style={[
+                    styles.sheetTabChip,
+                    selected && styles.sheetTabChipActive,
+                  ]}
+                  onPress={() => void handleSelectSheet(s.id)}
                 >
-                  <Text style={[styles.sheetTabText, selected && styles.sheetTabTextActive]}>
+                  <Text
+                    style={[
+                      styles.sheetTabText,
+                      selected && styles.sheetTabTextActive,
+                    ]}
+                  >
                     {s.title}
                   </Text>
                 </TouchableOpacity>
@@ -1422,7 +1497,10 @@ export default function IncomeSheetScreen() {
             })}
 
             {!isSettingsManageMode && (
-              <TouchableOpacity style={styles.newSheetMiniBtn} onPress={openIncomeSetupWizard}>
+              <TouchableOpacity
+                style={styles.newSheetMiniBtn}
+                onPress={openIncomeSetupWizard}
+              >
                 <Ionicons name="add" size={15} color="#1D4ED8" />
                 <Text style={styles.newSheetMiniText}>Add Income</Text>
               </TouchableOpacity>
@@ -1445,7 +1523,6 @@ export default function IncomeSheetScreen() {
         </View>
       )}
 
-      {/* Action Bar when a tabular sheet is active */}
       {activeSheet && activeSheet.kind !== 'daily' && (
         <View style={styles.actionBar}>
           <TouchableOpacity
@@ -1502,7 +1579,10 @@ export default function IncomeSheetScreen() {
       {!activeSheet ? (
         <View style={styles.emptyStateContainer}>
           {!isSettingsManageMode ? (
-            <TouchableOpacity style={styles.primaryAddIncomeBtn} onPress={openIncomeSetupWizard}>
+            <TouchableOpacity
+              style={styles.primaryAddIncomeBtn}
+              onPress={openIncomeSetupWizard}
+            >
               <Ionicons name="add" size={22} color="#FFFFFF" />
               <Text style={styles.primaryAddIncomeText}>Add Income</Text>
             </TouchableOpacity>
@@ -1515,19 +1595,30 @@ export default function IncomeSheetScreen() {
           )}
         </View>
       ) : activeSheet.kind === 'daily' ? (
-        /* দৈনিক আয় (Daily Income Sheet) ভিউ */
         <ScrollView contentContainerStyle={styles.dailyContainer}>
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 4 }}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={{ marginBottom: 4 }}
+          >
             <View style={{ flexDirection: 'row', gap: 6 }}>
               {FISCAL_MONTHS.map((m) => {
                 const active = dailySelectedMonth === m;
                 return (
                   <TouchableOpacity
                     key={m}
-                    style={[styles.monthChip, active && styles.monthChipActive]}
+                    style={[
+                      styles.monthChip,
+                      active && styles.monthChipActive,
+                    ]}
                     onPress={() => setDailySelectedMonth(m)}
                   >
-                    <Text style={[styles.monthChipText, active && styles.monthChipTextActive]}>
+                    <Text
+                      style={[
+                        styles.monthChipText,
+                        active && styles.monthChipTextActive,
+                      ]}
+                    >
                       {m.slice(0, 3)}
                     </Text>
                   </TouchableOpacity>
@@ -1537,14 +1628,22 @@ export default function IncomeSheetScreen() {
           </ScrollView>
 
           <View style={styles.dailySummaryRow}>
-            <View style={[styles.dailySummaryCard, { backgroundColor: '#DCFCE7' }]}>
-              <Text style={styles.dailySummaryLabel}>{dailySelectedMonth} মোট দৈনিক আয়</Text>
+            <View
+              style={[styles.dailySummaryCard, { backgroundColor: '#DCFCE7' }]}
+            >
+              <Text style={styles.dailySummaryLabel}>
+                {dailySelectedMonth} মোট দৈনিক আয়
+              </Text>
               <Text style={[styles.dailySummaryVal, { color: '#15803D' }]}>
                 {dailyMonthTotal.toLocaleString('en-IN')} Tk.
               </Text>
             </View>
-            <View style={[styles.dailySummaryCard, { backgroundColor: '#DBEAFE' }]}>
-              <Text style={styles.dailySummaryLabel}>বার্ষিক ({fiscalLabel}) মোট</Text>
+            <View
+              style={[styles.dailySummaryCard, { backgroundColor: '#DBEAFE' }]}
+            >
+              <Text style={styles.dailySummaryLabel}>
+                বার্ষিক ({fiscalLabel}) মোট
+              </Text>
               <Text style={[styles.dailySummaryVal, { color: '#1D4ED8' }]}>
                 {dailyYearTotal.toLocaleString('en-IN')} Tk.
               </Text>
@@ -1583,8 +1682,11 @@ export default function IncomeSheetScreen() {
               onChangeText={setDailyNoteInput}
             />
             <TouchableOpacity
-              style={[styles.addBtn, { backgroundColor: '#16A34A', paddingVertical: 11 }]}
-              onPress={handleAddDailyEntry}
+              style={[
+                styles.addBtn,
+                { backgroundColor: '#16A34A', paddingVertical: 11 },
+              ]}
+              onPress={() => void handleAddDailyEntry()}
             >
               <Ionicons name="add-circle-outline" size={18} color="#FFFFFF" />
               <Text style={styles.addBtnText}>দৈনিক আয় সেভ করুন</Text>
@@ -1593,10 +1695,17 @@ export default function IncomeSheetScreen() {
 
           <View style={styles.dailyListCard}>
             <Text style={styles.dailyFormTitle}>
-              {dailySelectedMonth} মাসের দৈনিক আয়ের তালিকা ({dailyMonthEntries.length})
+              {dailySelectedMonth} মাসের দৈনিক আয়ের তালিকা (
+              {dailyMonthEntries.length})
             </Text>
             {dailyMonthEntries.length === 0 ? (
-              <Text style={{ color: '#64748B', fontSize: 12.5, paddingVertical: 10 }}>
+              <Text
+                style={{
+                  color: '#64748B',
+                  fontSize: 12.5,
+                  paddingVertical: 10,
+                }}
+              >
                 এই মাসে এখনো কোনো দৈনিক আয় যোগ করা হয়নি।
               </Text>
             ) : (
@@ -1613,7 +1722,7 @@ export default function IncomeSheetScreen() {
                     {entry.amount.toLocaleString('en-IN')} Tk.
                   </Text>
                   <TouchableOpacity
-                    onPress={() => handleDeleteDailyEntry(entry.id)}
+                    onPress={() => void handleDeleteDailyEntry(entry.id)}
                     style={{ padding: 4 }}
                   >
                     <Ionicons name="trash-outline" size={16} color="#DC2626" />
@@ -1624,10 +1733,8 @@ export default function IncomeSheetScreen() {
           </View>
         </ScrollView>
       ) : (
-        /* মূল মাসভিত্তিক Income Sheet (Salary / Business / Custom) */
         <ScrollView style={styles.verticalScroll}>
           <View style={styles.sheetWrapper}>
-            {/* Left Fixed Description Column */}
             <View style={[styles.fixedColumn, { width: descColWidth }]}>
               <View style={[styles.headerCell, { width: descColWidth }]}>
                 <Text style={styles.headerCellText}>খাত / Description</Text>
@@ -1638,7 +1745,10 @@ export default function IncomeSheetScreen() {
               </View>
 
               {visibleIncomeRows.map((row) => (
-                <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
+                <View
+                  key={row.id}
+                  style={[styles.descCell, { width: descColWidth }]}
+                >
                   <View style={{ flex: 1, marginRight: 3 }}>
                     <Text style={styles.descText} numberOfLines={2}>
                       {row.description}
@@ -1648,15 +1758,25 @@ export default function IncomeSheetScreen() {
                     )}
                   </View>
                   <TouchableOpacity
-                    onPress={() => handleToggleHideRow(row.id, true)}
+                    onPress={() => void handleToggleHideRow(row.id, true)}
                     accessibilityLabel="Hide item"
                   >
-                    <Ionicons name="eye-off-outline" size={15} color="#64748B" />
+                    <Ionicons
+                      name="eye-off-outline"
+                      size={15}
+                      color="#64748B"
+                    />
                   </TouchableOpacity>
                 </View>
               ))}
 
-              <View style={[styles.summaryCell, styles.totalIncomeBg, { width: descColWidth }]}>
+              <View
+                style={[
+                  styles.summaryCell,
+                  styles.totalIncomeBg,
+                  { width: descColWidth },
+                ]}
+              >
                 <Text style={styles.summaryTitle}>Total Payable (Tk.)</Text>
               </View>
 
@@ -1667,31 +1787,51 @@ export default function IncomeSheetScreen() {
               </View>
 
               {visibleDeductionRows.map((row) => (
-                <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
+                <View
+                  key={row.id}
+                  style={[styles.descCell, { width: descColWidth }]}
+                >
                   <View style={{ flex: 1, marginRight: 3 }}>
                     <Text style={styles.descText} numberOfLines={2}>
                       {row.description}
                     </Text>
                   </View>
                   <TouchableOpacity
-                    onPress={() => handleToggleHideRow(row.id, true)}
+                    onPress={() => void handleToggleHideRow(row.id, true)}
                     accessibilityLabel="Hide item"
                   >
-                    <Ionicons name="eye-off-outline" size={15} color="#64748B" />
+                    <Ionicons
+                      name="eye-off-outline"
+                      size={15}
+                      color="#64748B"
+                    />
                   </TouchableOpacity>
                 </View>
               ))}
 
-              <View style={[styles.summaryCell, styles.totalDeductionBg, { width: descColWidth }]}>
+              <View
+                style={[
+                  styles.summaryCell,
+                  styles.totalDeductionBg,
+                  { width: descColWidth },
+                ]}
+              >
                 <Text style={styles.summaryTitle}>Total Deduction (Tk.)</Text>
               </View>
 
-              <View style={[styles.summaryCell, styles.netIncomeBg, { width: descColWidth }]}>
-                <Text style={[styles.summaryTitle, { color: '#1D4ED8' }]}>Net Pay (Tk.)</Text>
+              <View
+                style={[
+                  styles.summaryCell,
+                  styles.netIncomeBg,
+                  { width: descColWidth },
+                ]}
+              >
+                <Text style={[styles.summaryTitle, { color: '#1D4ED8' }]}>
+                  Net Pay (Tk.)
+                </Text>
               </View>
             </View>
 
-            {/* Right Exact-Grid Viewport (সবসময় July থেকে শুরু) */}
             <View style={{ width: exactRightViewportWidth, overflow: 'hidden' }}>
               <ScrollView
                 ref={monthScrollRef}
@@ -1709,7 +1849,10 @@ export default function IncomeSheetScreen() {
                 <View>
                   <View style={styles.row}>
                     {FISCAL_MONTHS.map((month) => {
-                      const calYear = getMonthCalendarYear(month, fiscalStartYear);
+                      const calYear = getMonthCalendarYear(
+                        month,
+                        fiscalStartYear
+                      );
                       const isCurrent = month === getCurrentFiscalMonthName();
                       return (
                         <View
@@ -1730,7 +1873,10 @@ export default function IncomeSheetScreen() {
 
                   <View style={styles.row}>
                     {FISCAL_MONTHS.map((m) => (
-                      <View key={m} style={[styles.sectionBanner, { width: monthColWidth }]} />
+                      <View
+                        key={m}
+                        style={[styles.sectionBanner, { width: monthColWidth }]}
+                      />
                     ))}
                   </View>
 
@@ -1750,8 +1896,12 @@ export default function IncomeSheetScreen() {
                           { width: monthColWidth },
                         ]}
                       >
-                        <Text style={[styles.summaryValue, { color: '#15803D' }]}>
-                          {monthlySummary[month].totalPayable.toLocaleString('en-IN')}
+                        <Text
+                          style={[styles.summaryValue, { color: '#15803D' }]}
+                        >
+                          {monthlySummary[month].totalPayable.toLocaleString(
+                            'en-IN'
+                          )}
                         </Text>
                       </View>
                     ))}
@@ -1759,7 +1909,10 @@ export default function IncomeSheetScreen() {
 
                   <View style={styles.row}>
                     {FISCAL_MONTHS.map((m) => (
-                      <View key={m} style={[styles.sectionBanner, { width: monthColWidth }]} />
+                      <View
+                        key={m}
+                        style={[styles.sectionBanner, { width: monthColWidth }]}
+                      />
                     ))}
                   </View>
 
@@ -1779,8 +1932,12 @@ export default function IncomeSheetScreen() {
                           { width: monthColWidth },
                         ]}
                       >
-                        <Text style={[styles.summaryValue, { color: '#B91C1C' }]}>
-                          {monthlySummary[month].totalDeduction.toLocaleString('en-IN')}
+                        <Text
+                          style={[styles.summaryValue, { color: '#B91C1C' }]}
+                        >
+                          {monthlySummary[month].totalDeduction.toLocaleString(
+                            'en-IN'
+                          )}
                         </Text>
                       </View>
                     ))}
@@ -1790,9 +1947,15 @@ export default function IncomeSheetScreen() {
                     {FISCAL_MONTHS.map((month) => (
                       <View
                         key={month}
-                        style={[styles.summaryCell, styles.netIncomeBg, { width: monthColWidth }]}
+                        style={[
+                          styles.summaryCell,
+                          styles.netIncomeBg,
+                          { width: monthColWidth },
+                        ]}
                       >
-                        <Text style={[styles.summaryValue, { color: '#1D4ED8' }]}>
+                        <Text
+                          style={[styles.summaryValue, { color: '#1D4ED8' }]}
+                        >
                           {monthlySummary[month].netPay.toLocaleString('en-IN')}
                         </Text>
                       </View>
@@ -1805,7 +1968,6 @@ export default function IncomeSheetScreen() {
         </ScrollView>
       )}
 
-      {/* + Add Income প্রশ্নমালা / Sheet Setup Modal */}
       <Modal visible={incomeWizardVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1816,45 +1978,72 @@ export default function IncomeSheetScreen() {
             keyboardShouldPersistTaps="handled"
           >
             <View style={styles.modalCard}>
-              <Text style={styles.modalTitle}>আপনার Income সম্পর্কে প্রশ্নমালা</Text>
+              <Text style={styles.modalTitle}>
+                আপনার Income সম্পর্কে প্রশ্নমালা
+              </Text>
 
-              <Text style={styles.inputLabel}>১. আপনার আয়ের ধরন কোনটি?</Text>
+              <Text style={styles.inputLabel}>
+                ১. আপনার আয়ের ধরন কোনটি?
+              </Text>
               <View style={{ gap: 6, marginBottom: 12 }}>
                 <TouchableOpacity
-                  style={[styles.kindCard, wizardKind === 'salary' && styles.kindCardActive]}
+                  style={[
+                    styles.kindCard,
+                    wizardKind === 'salary' && styles.kindCardActive,
+                  ]}
                   onPress={() => setWizardKind('salary')}
                 >
-                  <Text style={styles.kindTitle}>চাকরি / বেতনভুক্ত (Salary & Allowances)</Text>
+                  <Text style={styles.kindTitle}>
+                    চাকরি / বেতনভুক্ত (Salary & Allowances)
+                  </Text>
                   <Text style={styles.kindSub}>
-                    Net Basic, House Rent (%), Medical, Arrear, Previous Paid Allowance সহ পূর্ণাঙ্গ শিট
+                    Net Basic, House Rent (%), Medical, Arrear, Previous Paid
+                    Allowance সহ পূর্ণাঙ্গ শিট
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.kindCard, wizardKind === 'daily' && styles.kindCardActive]}
+                  style={[
+                    styles.kindCard,
+                    wizardKind === 'daily' && styles.kindCardActive,
+                  ]}
                   onPress={() => setWizardKind('daily')}
                 >
-                  <Text style={styles.kindTitle}>দৈনিক আয় (Daily Income Sheet)</Text>
+                  <Text style={styles.kindTitle}>
+                    দৈনিক আয় (Daily Income Sheet)
+                  </Text>
                   <Text style={styles.kindSub}>
-                    প্রতিদিনের তারিখ ও উৎস অনুযায়ী আয় এন্ট্রি এবং মাসিক/বার্ষিক যোগফল
+                    প্রতিদিনের তারিখ ও উৎস অনুযায়ী আয় এন্ট্রি এবং মাসিক/বার্ষিক
+                    যোগফল
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.kindCard, wizardKind === 'business' && styles.kindCardActive]}
+                  style={[
+                    styles.kindCard,
+                    wizardKind === 'business' && styles.kindCardActive,
+                  ]}
                   onPress={() => setWizardKind('business')}
                 >
-                  <Text style={styles.kindTitle}>ব্যবসা / ফ্রিল্যান্সিং (Business / Freelance)</Text>
+                  <Text style={styles.kindTitle}>
+                    ব্যবসা / ফ্রিল্যান্সিং (Business / Freelance)
+                  </Text>
                   <Text style={styles.kindSub}>
-                    Primary Income/Sales, Extra Income, Operating Cost ও Tax/Expense
+                    Primary Income/Sales, Extra Income, Operating Cost ও
+                    Tax/Expense
                   </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.kindCard, wizardKind === 'custom' && styles.kindCardActive]}
+                  style={[
+                    styles.kindCard,
+                    wizardKind === 'custom' && styles.kindCardActive,
+                  ]}
                   onPress={() => setWizardKind('custom')}
                 >
-                  <Text style={styles.kindTitle}>নিজের মতো কাস্টম আয় (Custom Sheet)</Text>
+                  <Text style={styles.kindTitle}>
+                    নিজের মতো কাস্টম আয় (Custom Sheet)
+                  </Text>
                   <Text style={styles.kindSub}>
                     আপনার নিজের আয়ের খাতের নাম দিয়ে শিট তৈরি করুন
                   </Text>
@@ -1889,7 +2078,6 @@ export default function IncomeSheetScreen() {
                 </>
               )}
 
-              {/* শুধু Salary-এর ক্ষেত্রেই প্রাথমিক Basic ও ১২ মাসের অপশন দেখাবে */}
               {wizardKind === 'salary' && (
                 <>
                   <Text style={styles.inputLabel}>
@@ -1905,10 +2093,14 @@ export default function IncomeSheetScreen() {
 
                   <TouchableOpacity
                     style={styles.checkboxRow}
-                    onPress={() => setWizardApplyAllMonths(!wizardApplyAllMonths)}
+                    onPress={() =>
+                      setWizardApplyAllMonths(!wizardApplyAllMonths)
+                    }
                   >
                     <Ionicons
-                      name={wizardApplyAllMonths ? 'checkbox' : 'square-outline'}
+                      name={
+                        wizardApplyAllMonths ? 'checkbox' : 'square-outline'
+                      }
                       size={22}
                       color="#2563EB"
                     />
@@ -1919,8 +2111,13 @@ export default function IncomeSheetScreen() {
 
                   {!wizardApplyAllMonths && (
                     <View style={{ marginBottom: 12 }}>
-                      <Text style={styles.inputLabel}>কোন মাস থেকে শুরু হবে?</Text>
-                      <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      <Text style={styles.inputLabel}>
+                        কোন মাস থেকে শুরু হবে?
+                      </Text>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                      >
                         <View style={{ flexDirection: 'row', gap: 6 }}>
                           {FISCAL_MONTHS.map((m) => (
                             <TouchableOpacity
@@ -1928,13 +2125,15 @@ export default function IncomeSheetScreen() {
                               onPress={() => setWizardStartMonth(m)}
                               style={[
                                 styles.monthChip,
-                                wizardStartMonth === m && styles.monthChipActive,
+                                wizardStartMonth === m &&
+                                  styles.monthChipActive,
                               ]}
                             >
                               <Text
                                 style={[
                                   styles.monthChipText,
-                                  wizardStartMonth === m && styles.monthChipTextActive,
+                                  wizardStartMonth === m &&
+                                    styles.monthChipTextActive,
                                 ]}
                               >
                                 {m.slice(0, 3)}
@@ -1948,7 +2147,6 @@ export default function IncomeSheetScreen() {
                 </>
               )}
 
-              {/* Business বা Custom-এ ১২ মাসের অপশন ছাড়াই ঐচ্ছিক প্রাথমিক আয় */}
               {(wizardKind === 'business' || wizardKind === 'custom') && (
                 <>
                   <Text style={styles.inputLabel}>
@@ -1969,13 +2167,17 @@ export default function IncomeSheetScreen() {
                   style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                   onPress={() => setIncomeWizardVisible(false)}
                 >
-                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>
+                    বাতিল
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
-                  onPress={handleCreateIncomeSheetFromWizard}
+                  onPress={() => void handleCreateIncomeSheetFromWizard()}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>শিট তৈরি করুন</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                    শিট তৈরি করুন
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1983,7 +2185,6 @@ export default function IncomeSheetScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Strict Sheet Delete Confirmation Modal */}
       <Modal visible={Boolean(deleteSheetTarget)} transparent animationType="fade">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2000,11 +2201,18 @@ export default function IncomeSheetScreen() {
 
               {deleteSheetTarget && (
                 <View style={styles.strictDangerBox}>
-                  <Text style={{ fontWeight: '700', color: '#991B1B', fontSize: 13.5 }}>
+                  <Text
+                    style={{
+                      fontWeight: '700',
+                      color: '#991B1B',
+                      fontSize: 13.5,
+                    }}
+                  >
                     Sheet: {deleteSheetTarget.title} ({fiscalLabel})
                   </Text>
                   <Text style={{ color: '#7F1D1D', fontSize: 12 }}>
-                    সতর্কতা: এই শিটটি ডিলিট করলে এর ভেতরের সব মাসের আয়, ভাতা ও ডিডাকশন ডাটা চিরতরে মুছে যাবে।
+                    সতর্কতা: এই শিটটি ডিলিট করলে এর ভেতরের সব মাসের আয়, ভাতা ও
+                    ডিডাকশন ডাটা চিরতরে মুছে যাবে।
                   </Text>
                 </View>
               )}
@@ -2019,12 +2227,14 @@ export default function IncomeSheetScreen() {
                   color="#DC2626"
                 />
                 <Text style={styles.checkboxLabel}>
-                  আমি সব ঝুঁকি জেনে "{deleteSheetTarget?.title}" শিটটি স্থায়ীভাবে মুছে ফেলতে চাই।
+                  আমি সব ঝুঁকি জেনে &ldquo;{deleteSheetTarget?.title}&rdquo;
+                  শিটটি স্থায়ীভাবে মুছে ফেলতে চাই।
                 </Text>
               </TouchableOpacity>
 
               <Text style={styles.inputLabel}>
-                নিশ্চিত করতে "{deleteSheetTarget?.title}" অথবা "DELETE" লিখুন:
+                নিশ্চিত করতে &ldquo;{deleteSheetTarget?.title}&rdquo; অথবা
+                &ldquo;DELETE&rdquo; লিখুন:
               </Text>
               <TextInput
                 style={styles.modalInput}
@@ -2042,7 +2252,9 @@ export default function IncomeSheetScreen() {
                     setDeleteSheetTypedText('');
                   }}
                 >
-                  <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>
+                    বাতিল
+                  </Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -2050,12 +2262,16 @@ export default function IncomeSheetScreen() {
                   style={[
                     styles.modalBtn,
                     {
-                      backgroundColor: canConfirmStrictSheetDelete ? '#DC2626' : '#FCA5A5',
+                      backgroundColor: canConfirmStrictSheetDelete
+                        ? '#DC2626'
+                        : '#FCA5A5',
                     },
                   ]}
-                  onPress={handleConfirmStrictSheetDelete}
+                  onPress={() => void handleConfirmStrictSheetDelete()}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>Permanent Delete</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                    Permanent Delete
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -2063,7 +2279,6 @@ export default function IncomeSheetScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Cell Edit Modal — Salary-এ আগের হুবহু পপআপ স্টাইল; Business/Custom-এ শুধু সরল টাকার ইনপুট */}
       <Modal visible={editModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2079,17 +2294,26 @@ export default function IncomeSheetScreen() {
                 <Text style={styles.inputLabel}>হিসাবের ধরন নির্বাচন করুন</Text>
                 <View style={styles.modeRow}>
                   <TouchableOpacity
-                    style={[styles.modeBtn, editMode === 'fixed' && styles.modeBtnActive]}
+                    style={[
+                      styles.modeBtn,
+                      editMode === 'fixed' && styles.modeBtnActive,
+                    ]}
                     onPress={() => setEditMode('fixed')}
                   >
                     <Text
-                      style={[styles.modeBtnText, editMode === 'fixed' && styles.modeBtnTextActive]}
+                      style={[
+                        styles.modeBtnText,
+                        editMode === 'fixed' && styles.modeBtnTextActive,
+                      ]}
                     >
                       নির্দিষ্ট টাকা (Fixed)
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.modeBtn, editMode === 'percent' && styles.modeBtnActive]}
+                    style={[
+                      styles.modeBtn,
+                      editMode === 'percent' && styles.modeBtnActive,
+                    ]}
                     onPress={() => setEditMode('percent')}
                   >
                     <Text
@@ -2123,7 +2347,6 @@ export default function IncomeSheetScreen() {
               autoFocus
             />
 
-            {/* শুধু Salary শিটেই পরবর্তী সব মাসে প্রযোজ্য হওয়ার অপশন দেখাবে */}
             {isSalarySheet && (
               <TouchableOpacity
                 style={styles.checkboxRow}
@@ -2135,7 +2358,8 @@ export default function IncomeSheetScreen() {
                   color="#2563EB"
                 />
                 <Text style={styles.checkboxLabel}>
-                  {editingMonth} থেকে June পর্যন্ত পরবর্তী সব মাসেও এটি প্রযোজ্য হবে
+                  {editingMonth} থেকে June পর্যন্ত পরবর্তী সব মাসেও এটি প্রযোজ্য
+                  হবে
                 </Text>
               </TouchableOpacity>
             )}
@@ -2145,43 +2369,65 @@ export default function IncomeSheetScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setEditModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বাতিল
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleSaveCellEdit}
+                onPress={() => void handleSaveCellEdit()}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>সেভ করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>
+                  সেভ করুন
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </KeyboardAvoidingView>
       </Modal>
 
-      {/* Web Download & Share Action Modal */}
       <Modal visible={pdfActionModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>রিপোর্ট ডাউনলোড ও শেয়ার ({fiscalLabel})</Text>
+            <Text style={styles.modalTitle}>
+              রিপোর্ট ডাউনলোড ও শেয়ার ({fiscalLabel})
+            </Text>
             <View style={{ gap: 10, marginBottom: 14 }}>
               <TouchableOpacity
-                style={[styles.addBtn, { backgroundColor: '#7C3AED', paddingVertical: 11 }]}
-                onPress={() => triggerWebPrintPdf(generatedHtml)}
+                style={[
+                  styles.addBtn,
+                  { backgroundColor: '#7C3AED', paddingVertical: 11 },
+                ]}
+                onPress={() => void triggerWebPrintPdf(generatedHtml)}
               >
-                <Ionicons name="document-text-outline" size={18} color="#FFF" />
+                <Ionicons
+                  name="document-text-outline"
+                  size={18}
+                  color="#FFF"
+                />
                 <Text style={styles.addBtnText}>Print / Save as PDF</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.addBtn, { backgroundColor: '#16A34A', paddingVertical: 11 }]}
-                onPress={triggerWebShare}
+                style={[
+                  styles.addBtn,
+                  { backgroundColor: '#16A34A', paddingVertical: 11 },
+                ]}
+                onPress={() => void triggerWebShare()}
               >
-                <Ionicons name="share-social-outline" size={18} color="#FFF" />
+                <Ionicons
+                  name="share-social-outline"
+                  size={18}
+                  color="#FFF"
+                />
                 <Text style={styles.addBtnText}>Share Summary</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
-                style={[styles.addBtn, { backgroundColor: '#2563EB', paddingVertical: 11 }]}
+                style={[
+                  styles.addBtn,
+                  { backgroundColor: '#2563EB', paddingVertical: 11 },
+                ]}
                 onPress={() => triggerWebDownload(generatedHtml)}
               >
                 <Ionicons name="download-outline" size={18} color="#FFF" />
@@ -2194,20 +2440,23 @@ export default function IncomeSheetScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setPdfActionModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বন্ধ করুন</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বন্ধ করুন
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Hidden Items Modal */}
       <Modal visible={hiddenModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>লুকানো খাতসমূহ ({fiscalLabel})</Text>
             {hiddenRows.length === 0 ? (
-              <Text style={{ color: '#64748B', fontSize: 13, marginBottom: 14 }}>
+              <Text
+                style={{ color: '#64748B', fontSize: 13, marginBottom: 14 }}
+              >
                 বর্তমানে কোনো খাত লুকানো নেই।
               </Text>
             ) : (
@@ -2217,12 +2466,14 @@ export default function IncomeSheetScreen() {
                     <View>
                       <Text style={styles.descText}>{item.description}</Text>
                       <Text style={styles.hintSubText}>
-                        {item.type === 'income' ? 'Income / Allowance' : 'Deduction'}
+                        {item.type === 'income'
+                          ? 'Income / Allowance'
+                          : 'Deduction'}
                       </Text>
                     </View>
                     <TouchableOpacity
                       style={styles.unhideBtn}
-                      onPress={() => handleToggleHideRow(item.id, false)}
+                      onPress={() => void handleToggleHideRow(item.id, false)}
                     >
                       <Ionicons name="eye-outline" size={16} color="#FFFFFF" />
                       <Text style={styles.unhideBtnText}>Show</Text>
@@ -2236,14 +2487,15 @@ export default function IncomeSheetScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
                 onPress={() => setHiddenModalVisible(false)}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>বন্ধ করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>
+                  বন্ধ করুন
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* Add New Item Modal */}
       <Modal visible={addModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2269,17 +2521,26 @@ export default function IncomeSheetScreen() {
                 <Text style={styles.inputLabel}>হিসাবের ধরন</Text>
                 <View style={styles.modeRow}>
                   <TouchableOpacity
-                    style={[styles.modeBtn, newMode === 'fixed' && styles.modeBtnActive]}
+                    style={[
+                      styles.modeBtn,
+                      newMode === 'fixed' && styles.modeBtnActive,
+                    ]}
                     onPress={() => setNewMode('fixed')}
                   >
                     <Text
-                      style={[styles.modeBtnText, newMode === 'fixed' && styles.modeBtnTextActive]}
+                      style={[
+                        styles.modeBtnText,
+                        newMode === 'fixed' && styles.modeBtnTextActive,
+                      ]}
                     >
                       নির্দিষ্ট টাকা (Fixed)
                     </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={[styles.modeBtn, newMode === 'percent' && styles.modeBtnActive]}
+                    style={[
+                      styles.modeBtn,
+                      newMode === 'percent' && styles.modeBtnActive,
+                    ]}
                     onPress={() => setNewMode('percent')}
                   >
                     <Text
@@ -2296,17 +2557,22 @@ export default function IncomeSheetScreen() {
             )}
 
             <Text style={styles.inputLabel}>
-              {isSalarySheet && newMode === 'percent' ? 'শতকরা হার (%)' : 'টাকার পরিমাণ'}
+              {isSalarySheet && newMode === 'percent'
+                ? 'শতকরা হার (%)'
+                : 'টাকার পরিমাণ'}
             </Text>
             <TextInput
               style={styles.modalInput}
               keyboardType="numeric"
-              placeholder={isSalarySheet && newMode === 'percent' ? 'যেমন: 20' : 'যেমন: 3000'}
+              placeholder={
+                isSalarySheet && newMode === 'percent'
+                  ? 'যেমন: 20'
+                  : 'যেমন: 3000'
+              }
               value={newDefaultVal}
               onChangeText={setNewDefaultVal}
             />
 
-            {/* শুধু Salary শিটের ক্ষেত্রেই ১২ মাসের অপশন দেখাবে */}
             {isSalarySheet && (
               <TouchableOpacity
                 style={styles.checkboxRow}
@@ -2340,7 +2606,8 @@ export default function IncomeSheetScreen() {
                         <Text
                           style={[
                             styles.monthChipText,
-                            selectedStartMonth === m && styles.monthChipTextActive,
+                            selectedStartMonth === m &&
+                              styles.monthChipTextActive,
                           ]}
                         >
                           {m.slice(0, 3)}
@@ -2357,13 +2624,17 @@ export default function IncomeSheetScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setAddModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>বাতিল</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  বাতিল
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleAddRow}
+                onPress={() => void handleAddRow()}
               >
-                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>যোগ করুন</Text>
+                <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>
+                  যোগ করুন
+                </Text>
               </TouchableOpacity>
             </View>
           </View>

@@ -1,4 +1,3 @@
-
 import { Link, useRouter } from 'expo-router';
 import {
   GoogleAuthProvider,
@@ -32,14 +31,26 @@ import {
 const GOOGLE_WEB_CLIENT_ID =
   '659773105401-2pb5ef8c61qem8gqg4k5dvkh0sfeltcq.apps.googleusercontent.com';
 
-let NativeGoogleSignin: any = null;
-let nativeStatusCodes: any = null;
+interface NativeGoogleSigninModule {
+  configure: (config: { webClientId: string; offlineAccess?: boolean }) => void;
+  hasPlayServices: (opts?: { showPlayServicesUpdateDialog?: boolean }) => Promise<boolean>;
+  signOut: () => Promise<null>;
+  signIn: () => Promise<{
+    type?: string;
+    idToken?: string | null;
+    data?: { idToken?: string | null };
+  }>;
+}
+
+let NativeGoogleSignin: NativeGoogleSigninModule | null = null;
+let nativeStatusCodes: Record<string, string> | null = null;
 
 if (Platform.OS !== 'web') {
   try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const googleSignInPkg = require('@react-native-google-signin/google-signin');
-    NativeGoogleSignin = googleSignInPkg.GoogleSignin;
-    nativeStatusCodes = googleSignInPkg.statusCodes;
+    NativeGoogleSignin = googleSignInPkg.GoogleSignin as NativeGoogleSigninModule;
+    nativeStatusCodes = googleSignInPkg.statusCodes as Record<string, string>;
   } catch (e) {
     console.log('GoogleSignin native module unavailable:', e);
   }
@@ -63,17 +74,22 @@ export default function LoginScreen() {
     }
 
     return new Promise<boolean>((resolve) => {
-      Alert.alert('Unassigned local data', message, [
-        {
-          text: 'Keep separate',
-          style: 'cancel',
-          onPress: () => resolve(false),
-        },
-        {
-          text: 'Import to this account',
-          onPress: () => resolve(true),
-        },
-      ], { cancelable: false });
+      Alert.alert(
+        'Unassigned local data',
+        message,
+        [
+          {
+            text: 'Keep separate',
+            style: 'cancel',
+            onPress: () => resolve(false),
+          },
+          {
+            text: 'Import to this account',
+            onPress: () => resolve(true),
+          },
+        ],
+        { cancelable: false }
+      );
     });
   };
 
@@ -90,7 +106,6 @@ export default function LoginScreen() {
     }
   }, []);
 
-  // Registered user login and guest data synchronization
   const finalizeRegisteredLogin = async (user: {
     uid: string;
     email: string | null;
@@ -101,13 +116,9 @@ export default function LoginScreen() {
       email: user.email,
       displayName: user.displayName,
       confirmLegacyDataImport,
-
-      // Existing Firebase data fetch
       fetchCloudDataFn: async (uid) => {
         return await fetchAllFirebaseData(uid);
       },
-
-      // Guest data upload when cloud is empty
       saveCloudDataFn: async (uid, data) => {
         await saveSnapshotToFirebase(uid, data);
       },
@@ -135,8 +146,9 @@ export default function LoginScreen() {
         displayName: userCred.user.displayName,
       });
 
-      router.replace('/dashboard');
-    } catch (error: any) {
+      router.replace('/');
+    } catch (error: unknown) {
+      const firebaseErr = error as { code?: string; message?: string };
       const messages: Record<string, string> = {
         'auth/invalid-email': 'Invalid email address.',
         'auth/invalid-credential': 'Incorrect email or password.',
@@ -147,7 +159,9 @@ export default function LoginScreen() {
 
       Alert.alert(
         'Login Failed',
-        messages[error.code] || error.message || 'Unable to login.'
+        (firebaseErr.code && messages[firebaseErr.code]) ||
+          firebaseErr.message ||
+          'Unable to login.'
       );
     } finally {
       setLoading(false);
@@ -170,7 +184,7 @@ export default function LoginScreen() {
           displayName: webCred.user.displayName,
         });
 
-        router.replace('/dashboard');
+        router.replace('/');
         return;
       }
 
@@ -192,14 +206,12 @@ export default function LoginScreen() {
 
       const signInResult = await NativeGoogleSignin.signIn();
 
-      if ((signInResult as any)?.type === 'cancelled') {
+      if (signInResult?.type === 'cancelled') {
         return;
       }
 
       const idToken =
-        signInResult?.data?.idToken ??
-        (signInResult as any)?.idToken ??
-        null;
+        signInResult?.data?.idToken ?? signInResult?.idToken ?? null;
 
       if (!idToken) {
         throw new Error('Google ID Token পাওয়া যায়নি।');
@@ -214,18 +226,19 @@ export default function LoginScreen() {
         displayName: userCred.user.displayName,
       });
 
-      router.replace('/dashboard');
-    } catch (error: any) {
+      router.replace('/');
+    } catch (error: unknown) {
+      const errObj = error as { code?: string; message?: string };
       if (
         nativeStatusCodes &&
-        error?.code === nativeStatusCodes.SIGN_IN_CANCELLED
+        errObj?.code === nativeStatusCodes.SIGN_IN_CANCELLED
       ) {
         return;
       }
 
       Alert.alert(
         'Google Login Failed',
-        error?.message || 'Unable to sign in with Google.'
+        errObj?.message || 'Unable to sign in with Google.'
       );
     } finally {
       setLoading(false);
@@ -237,11 +250,12 @@ export default function LoginScreen() {
 
     try {
       await startGuestSession(confirmLegacyDataImport);
-      router.replace('/dashboard');
-    } catch (error: any) {
+      router.replace('/');
+    } catch (error: unknown) {
+      const errObj = error as { message?: string };
       Alert.alert(
         'Guest Login Failed',
-        error?.message || 'Unable to start guest session.'
+        errObj?.message || 'Unable to start guest session.'
       );
     } finally {
       setLoading(false);
@@ -292,9 +306,7 @@ export default function LoginScreen() {
               autoCapitalize="none"
             />
 
-            <TouchableOpacity
-              onPress={() => setShowPassword(!showPassword)}
-            >
+            <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
               <Text style={styles.showText}>
                 {showPassword ? 'Hide' : 'Show'}
               </Text>
@@ -310,7 +322,7 @@ export default function LoginScreen() {
 
           <TouchableOpacity
             style={[styles.button, loading && styles.disabledButton]}
-            onPress={handleLogin}
+            onPress={() => void handleLogin()}
             disabled={loading}
           >
             {loading ? (
@@ -327,47 +339,33 @@ export default function LoginScreen() {
           </View>
 
           <TouchableOpacity
-            style={[
-              styles.googleButton,
-              loading && styles.disabledButton,
-            ]}
-            onPress={handleGoogleLogin}
+            style={[styles.googleButton, loading && styles.disabledButton]}
+            onPress={() => void handleGoogleLogin()}
             disabled={loading}
           >
-            <Text style={styles.googleButtonText}>
-              Continue with Google
-            </Text>
+            <Text style={styles.googleButtonText}>Continue with Google</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[
-              styles.guestButton,
-              loading && styles.disabledButton,
-            ]}
-            onPress={handleGuestLogin}
+            style={[styles.guestButton, loading && styles.disabledButton]}
+            onPress={() => void handleGuestLogin()}
             disabled={loading}
           >
-            <Text style={styles.guestButtonText}>
-              Continue as Guest
-            </Text>
+            <Text style={styles.guestButtonText}>Continue as Guest</Text>
             <Text style={styles.guestSubText}>
               Local storage sync • Register anytime to keep data
             </Text>
           </TouchableOpacity>
 
           <View style={styles.signupRow}>
-            <Text style={styles.normalText}>
-              Don&apos;t have an account?{' '}
-            </Text>
+            <Text style={styles.normalText}>Don&apos;t have an account? </Text>
             <Link href="/register" style={styles.link}>
               Sign Up
             </Link>
           </View>
         </View>
 
-        <Text style={styles.footer}>
-          Secure login powered by Firebase
-        </Text>
+        <Text style={styles.footer}>Secure login powered by Firebase</Text>
       </ScrollView>
     </KeyboardAvoidingView>
   );

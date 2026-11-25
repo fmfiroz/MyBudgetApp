@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Modal,
@@ -12,6 +12,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import { saveLocalData } from '../utils/firebaseSync';
 // আপনার প্রজেক্টের Firebase কনফিগ অনুযায়ী নিচের ইমপোর্টটি অ্যাডজাস্ট করে নেবেন
 // import { db, auth } from '../firebaseConfig';
 // import { doc, setDoc, getDoc } from 'firebase/firestore';
@@ -34,7 +35,9 @@ export default function SocialReligiousPage({
   selectedMonthKey = '2026-11',
   userId = null,
 }: Props) {
-  const [sheetData, setSheetData] = useState<SocialReligiousSheetData | null>(null);
+  const [sheetData, setSheetData] = useState<SocialReligiousSheetData | null>(
+    null
+  );
   const [loading, setLoading] = useState<boolean>(true);
 
   // Modals State
@@ -56,64 +59,83 @@ export default function SocialReligiousPage({
 
   const storageKey = `@MyBudgetApp_SocialReligious_${userId || 'guest'}_${selectedMonthKey}`;
 
-  // ১. ডাটা লোড করা (AsyncStorage + Firebase Sync)
-  useEffect(() => {
-    loadSheetData();
-  }, [selectedMonthKey, userId]);
-
-  const loadSheetData = async () => {
-    try {
-      setLoading(true);
-      const localData = await AsyncStorage.getItem(storageKey);
-      if (localData) {
-        setSheetData(JSON.parse(localData));
-      } else {
-        setSheetData(null);
-      }
-
-      // Firebase থেকে সিঙ্ক করার লজিক (ইউজার লগইন থাকলে)
-      /*
-      if (userId) {
-        const docRef = doc(db, 'users', userId, 'socialReligious', selectedMonthKey);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const cloudData = docSnap.data() as SocialReligiousSheetData;
-          setSheetData(cloudData);
-          await AsyncStorage.setItem(storageKey, JSON.stringify(cloudData));
+  // ১. ডাটা লোড করা (saveLocalData / AsyncStorage + Firebase Sync)
+  const loadSheetData = useCallback(
+    async (isMountedRef?: { current: boolean }) => {
+      try {
+        if (!isMountedRef || isMountedRef.current) {
+          setLoading(true);
         }
-      }
-      */
-    } catch (error) {
-      console.error('Error loading social-religious data:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+        const localData = await AsyncStorage.getItem(storageKey);
+        if (isMountedRef && !isMountedRef.current) return;
 
-  // ২. ডাটা সেভ করা (AsyncStorage + Firebase)
-  const saveSheetData = async (updatedData: SocialReligiousSheetData | null) => {
-    try {
-      setSheetData(updatedData);
-      if (updatedData === null) {
-        await AsyncStorage.removeItem(storageKey);
-      } else {
-        await AsyncStorage.setItem(storageKey, JSON.stringify(updatedData));
+        if (localData) {
+          setSheetData(JSON.parse(localData) as SocialReligiousSheetData);
+        } else {
+          setSheetData(null);
+        }
+
+        // Firebase থেকে সিঙ্ক করার লজিক (ইউজার লগইন থাকলে)
         /*
         if (userId) {
           const docRef = doc(db, 'users', userId, 'socialReligious', selectedMonthKey);
-          await setDoc(docRef, updatedData, { merge: true });
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const cloudData = docSnap.data() as SocialReligiousSheetData;
+            if (!isMountedRef || isMountedRef.current) {
+              setSheetData(cloudData);
+            }
+            await saveLocalData(storageKey, cloudData);
+          }
         }
         */
+      } catch (error) {
+        console.error('Error loading social-religious data:', error);
+      } finally {
+        if (!isMountedRef || isMountedRef.current) {
+          setLoading(false);
+        }
       }
-    } catch (error) {
-      console.error('Error saving social-religious data:', error);
-    }
-  };
+    },
+    [storageKey]
+  );
+
+  useEffect(() => {
+    const mountedRef = { current: true };
+    void loadSheetData(mountedRef);
+    return () => {
+      mountedRef.current = false;
+    };
+  }, [loadSheetData]);
+
+  // ২. ডাটা সেভ করা (saveLocalData + Firebase)
+  const saveSheetData = useCallback(
+    async (updatedData: SocialReligiousSheetData | null) => {
+      try {
+        setSheetData(updatedData);
+        if (updatedData === null) {
+          await AsyncStorage.removeItem(storageKey);
+        } else {
+          await saveLocalData(storageKey, updatedData);
+          /*
+          if (userId) {
+            const docRef = doc(db, 'users', userId, 'socialReligious', selectedMonthKey);
+            await setDoc(docRef, updatedData, { merge: true });
+          }
+          */
+        }
+      } catch (error) {
+        console.error('Error saving social-religious data:', error);
+      }
+    },
+    [storageKey]
+  );
 
   // ৩. ধর্ম নির্বাচন করে নতুন শিট তৈরি করা
   const handleSelectReligion = (religion: ReligionType) => {
     const [yearStr, monthStr] = selectedMonthKey.split('-');
-    const daysInMonth = new Date(Number(yearStr), Number(monthStr), 0).getDate() || 30;
+    const daysInMonth =
+      new Date(Number(yearStr), Number(monthStr), 0).getDate() || 30;
     const cols = getColumnsForReligion(religion);
     const entries = createInitialEntries(daysInMonth, cols);
 
@@ -128,7 +150,7 @@ export default function SocialReligiousPage({
       kormiTargets: [],
     };
 
-    saveSheetData(newSheet);
+    void saveSheetData(newSheet);
     setReligionModalVisible(false);
   };
 
@@ -139,7 +161,7 @@ export default function SocialReligiousPage({
       .map((col) => (col.id === colId ? { ...col, isEnabled: true } : col))
       .sort((a, b) => a.orderIndex - b.orderIndex);
 
-    saveSheetData({ ...sheetData, columns: updatedCols });
+    void saveSheetData({ ...sheetData, columns: updatedCols });
   };
 
   // ৫. ডেইলি সেল আপডেট (Checkbox, Number, Text)
@@ -161,7 +183,7 @@ export default function SocialReligiousPage({
       }
       return entry;
     });
-    saveSheetData({ ...sheetData, entries: updatedEntries });
+    void saveSheetData({ ...sheetData, entries: updatedEntries });
   };
 
   // ৬. সামাজিক কাজ ড্রপডাউন সিলেক্ট করা
@@ -183,7 +205,7 @@ export default function SocialReligiousPage({
       return entry;
     });
 
-    saveSheetData({ ...sheetData, entries: updatedEntries });
+    void saveSheetData({ ...sheetData, entries: updatedEntries });
     setSocialDropdownModal({ visible: false, day: null });
   };
 
@@ -197,10 +219,12 @@ export default function SocialReligiousPage({
       id: Date.now().toString(),
       serial: sheetData.dawatiTargets.length + 1,
       name: dawatiName.trim(),
-      targetAddedDate: dawatiAddedDate.trim() || new Date().toISOString().split('T')[0],
-      lastContactDate: dawatiContactDate.trim() || new Date().toISOString().split('T')[0],
+      targetAddedDate:
+        dawatiAddedDate.trim() || new Date().toISOString().split('T')[0],
+      lastContactDate:
+        dawatiContactDate.trim() || new Date().toISOString().split('T')[0],
     };
-    saveSheetData({
+    void saveSheetData({
       ...sheetData,
       dawatiTargets: [...sheetData.dawatiTargets, newTarget],
     });
@@ -220,7 +244,7 @@ export default function SocialReligiousPage({
       serial: sheetData.kormiTargets.length + 1,
       name: kormiName.trim(),
     };
-    saveSheetData({
+    void saveSheetData({
       ...sheetData,
       kormiTargets: [...sheetData.kormiTargets, newTarget],
     });
@@ -234,7 +258,13 @@ export default function SocialReligiousPage({
       'আপনি কি নিশ্চিতভাবে এই মাসের সামাজিক ও ধর্মীয় শিটটি মুছে ফেলতে চান? সকল ডাটা মুছে যাবে।',
       [
         { text: 'বাতিল', style: 'cancel' },
-        { text: 'মুছে ফেলুন', style: 'destructive', onPress: () => saveSheetData(null) },
+        {
+          text: 'মুছে ফেলুন',
+          style: 'destructive',
+          onPress: () => {
+            void saveSheetData(null);
+          },
+        },
       ]
     );
   };
@@ -264,12 +294,14 @@ export default function SocialReligiousPage({
       if (col.type === 'date') {
         totals[col.id] = 'মোট';
       } else if (col.type === 'checkbox' || col.type === 'social_dropdown') {
-        const count = sheetData.entries.filter((e) => e.values[col.id] === true).length;
+        const count = sheetData.entries.filter(
+          (e) => e.values[col.id] === true
+        ).length;
         totals[col.id] = `${count} দিন`;
       } else if (col.type === 'number') {
         const sum = sheetData.entries.reduce((acc, e) => {
           const val = Number(e.values[col.id]);
-          return acc + (isNaN(val) ? 0 : val);
+          return acc + (Number.isNaN(val) ? 0 : val);
         }, 0);
         totals[col.id] = sum;
       } else {
@@ -280,7 +312,9 @@ export default function SocialReligiousPage({
     return totals;
   }, [sheetData, activeColumns]);
 
-  const currentReligionConfig = RELIGION_OPTIONS.find((r) => r.key === sheetData?.religion);
+  const currentReligionConfig = RELIGION_OPTIONS.find(
+    (r) => r.key === sheetData?.religion
+  );
 
   if (loading) {
     return (
@@ -306,7 +340,9 @@ export default function SocialReligiousPage({
           onPress={() => setReligionModalVisible(true)}
         >
           <Ionicons name="add-circle-outline" size={22} color="#FFF" />
-          <Text style={styles.primaryAddButtonText}>নতুন শিট যুক্ত করুন (Add)</Text>
+          <Text style={styles.primaryAddButtonText}>
+            নতুন শিট যুক্ত করুন (Add)
+          </Text>
         </TouchableOpacity>
 
         <Modal visible={religionModalVisible} transparent animationType="slide">
@@ -343,7 +379,9 @@ export default function SocialReligiousPage({
     <SafeAreaView style={styles.container}>
       <View style={styles.headerBar}>
         <View>
-          <Text style={styles.headerTitle}>সামাজিক ও ধর্মীয় ({selectedMonthKey})</Text>
+          <Text style={styles.headerTitle}>
+            সামাজিক ও ধর্মীয় ({selectedMonthKey})
+          </Text>
           <Text style={styles.headerSub}>{currentReligionConfig?.label}</Text>
         </View>
         <View style={styles.headerActions}>
@@ -356,14 +394,24 @@ export default function SocialReligiousPage({
               <Text style={styles.addColBtnText}>কলাম যোগ করুন</Text>
             </TouchableOpacity>
           )}
-          <TouchableOpacity style={styles.deleteIconBtn} onPress={handleResetSheet}>
+          <TouchableOpacity
+            style={styles.deleteIconBtn}
+            onPress={handleResetSheet}
+          >
             <Ionicons name="trash-outline" size={20} color="#D32F2F" />
           </TouchableOpacity>
         </View>
       </View>
 
-      <ScrollView style={styles.mainScroll} contentContainerStyle={{ paddingBottom: 40 }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={true} style={styles.tableWrapper}>
+      <ScrollView
+        style={styles.mainScroll}
+        contentContainerStyle={{ paddingBottom: 40 }}
+      >
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={true}
+          style={styles.tableWrapper}
+        >
           <View>
             <View style={styles.tableHeaderRow}>
               {activeColumns.map((col) => (
@@ -384,14 +432,20 @@ export default function SocialReligiousPage({
             {sheetData.entries.map((entry, rowIndex) => (
               <View
                 key={entry.day}
-                style={[styles.tableRow, rowIndex % 2 === 1 && styles.tableRowAlt]}
+                style={[
+                  styles.tableRow,
+                  rowIndex % 2 === 1 && styles.tableRowAlt,
+                ]}
               >
                 {activeColumns.map((col) => {
                   const cellVal = entry.values[col.id];
 
                   if (col.type === 'date') {
                     return (
-                      <View key={col.id} style={[styles.cell, styles.dateColWidth]}>
+                      <View
+                        key={col.id}
+                        style={[styles.cell, styles.dateColWidth]}
+                      >
                         <Text style={styles.dateText}>{entry.day}</Text>
                       </View>
                     );
@@ -403,9 +457,16 @@ export default function SocialReligiousPage({
                       <TouchableOpacity
                         key={col.id}
                         style={styles.cell}
-                        onPress={() => handleUpdateCell(entry.day, col.id, !isChecked)}
+                        onPress={() =>
+                          handleUpdateCell(entry.day, col.id, !isChecked)
+                        }
                       >
-                        <View style={[styles.checkboxBox, isChecked && styles.checkboxBoxChecked]}>
+                        <View
+                          style={[
+                            styles.checkboxBox,
+                            isChecked && styles.checkboxBoxChecked,
+                          ]}
+                        >
                           {isChecked ? (
                             <Ionicons name="checkmark" size={16} color="#FFF" />
                           ) : (
@@ -422,12 +483,21 @@ export default function SocialReligiousPage({
                       <TouchableOpacity
                         key={col.id}
                         style={[styles.cell, styles.socialColWidth]}
-                        onPress={() => setSocialDropdownModal({ visible: true, day: entry.day })}
+                        onPress={() =>
+                          setSocialDropdownModal({ visible: true, day: entry.day })
+                        }
                       >
                         {isDone ? (
                           <View style={styles.socialSelectedBadge}>
-                            <Ionicons name="checkmark-circle" size={15} color="#2E7D32" />
-                            <Text style={styles.socialSelectedText} numberOfLines={1}>
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={15}
+                              color="#2E7D32"
+                            />
+                            <Text
+                              style={styles.socialSelectedText}
+                              numberOfLines={1}
+                            >
                               {entry.socialWorkType}
                             </Text>
                           </View>
@@ -445,9 +515,14 @@ export default function SocialReligiousPage({
                           style={styles.numberInput}
                           keyboardType="numeric"
                           placeholder="-"
-                          value={cellVal !== null && cellVal !== undefined ? String(cellVal) : ''}
+                          value={
+                            cellVal !== null && cellVal !== undefined
+                              ? String(cellVal)
+                              : ''
+                          }
                           onChangeText={(txt) => {
-                            const num = txt.trim() === '' ? null : Number(txt);
+                            const num =
+                              txt.trim() === '' ? null : Number(txt);
                             handleUpdateCell(entry.day, col.id, num);
                           }}
                         />
@@ -456,12 +531,17 @@ export default function SocialReligiousPage({
                   }
 
                   return (
-                    <View key={col.id} style={[styles.cell, styles.commentColWidth]}>
+                    <View
+                      key={col.id}
+                      style={[styles.cell, styles.commentColWidth]}
+                    >
                       <TextInput
                         style={styles.textInput}
                         placeholder="মন্তব্য..."
                         value={typeof cellVal === 'string' ? cellVal : ''}
-                        onChangeText={(txt) => handleUpdateCell(entry.day, col.id, txt)}
+                        onChangeText={(txt) =>
+                          handleUpdateCell(entry.day, col.id, txt)
+                        }
                       />
                     </View>
                   );
@@ -480,7 +560,9 @@ export default function SocialReligiousPage({
                     col.type === 'social_dropdown' && styles.socialColWidth,
                   ]}
                 >
-                  <Text style={styles.footerCellText}>{monthlyTotals[col.id]}</Text>
+                  <Text style={styles.footerCellText}>
+                    {monthlyTotals[col.id]}
+                  </Text>
                 </View>
               ))}
             </View>
@@ -492,7 +574,9 @@ export default function SocialReligiousPage({
           {!sheetData.isDawatiListVisible ? (
             <TouchableOpacity
               style={styles.revealListBtn}
-              onPress={() => saveSheetData({ ...sheetData, isDawatiListVisible: true })}
+              onPress={() => {
+                void saveSheetData({ ...sheetData, isDawatiListVisible: true });
+              }}
             >
               <Ionicons name="add-circle" size={20} color="#1565C0" />
               <Text style={styles.revealListBtnText}>
@@ -502,9 +586,16 @@ export default function SocialReligiousPage({
           ) : (
             <View style={styles.targetCard}>
               <View style={styles.targetCardHeader}>
-                <Text style={styles.targetCardTitle}>{currentReligionConfig?.dawatiListTitle}</Text>
+                <Text style={styles.targetCardTitle}>
+                  {currentReligionConfig?.dawatiListTitle}
+                </Text>
                 <TouchableOpacity
-                  onPress={() => saveSheetData({ ...sheetData, isDawatiListVisible: false })}
+                  onPress={() => {
+                    void saveSheetData({
+                      ...sheetData,
+                      isDawatiListVisible: false,
+                    });
+                  }}
                 >
                   <Text style={styles.hideText}>লুকান (Hide)</Text>
                 </TouchableOpacity>
@@ -529,26 +620,45 @@ export default function SocialReligiousPage({
                   value={dawatiContactDate}
                   onChangeText={setDawatiContactDate}
                 />
-                <TouchableOpacity style={styles.miniAddBtn} onPress={handleAddDawatiTarget}>
+                <TouchableOpacity
+                  style={styles.miniAddBtn}
+                  onPress={handleAddDawatiTarget}
+                >
                   <Ionicons name="add" size={20} color="#FFF" />
                 </TouchableOpacity>
               </View>
 
               <View style={styles.subTableHeader}>
                 <Text style={[styles.subTh, { width: 45 }]}>ক্রমিক</Text>
-                <Text style={[styles.subTh, { flex: 2 }]}>দাওয়াতি টার্গেট (নাম)</Text>
-                <Text style={[styles.subTh, { flex: 1.3 }]}>টার্গেটভুক্ত তারিখ</Text>
-                <Text style={[styles.subTh, { flex: 1.3 }]}>যোগাযোগের তারিখ</Text>
+                <Text style={[styles.subTh, { flex: 2 }]}>
+                  দাওয়াতি টার্গেট (নাম)
+                </Text>
+                <Text style={[styles.subTh, { flex: 1.3 }]}>
+                  টার্গেটভুক্ত তারিখ
+                </Text>
+                <Text style={[styles.subTh, { flex: 1.3 }]}>
+                  যোগাযোগের তারিখ
+                </Text>
               </View>
               {sheetData.dawatiTargets.length === 0 ? (
-                <Text style={styles.emptyListHint}>এখনো কোনো টার্গেট যোগ করা হয়নি।</Text>
+                <Text style={styles.emptyListHint}>
+                  এখনো কোনো টার্গেট যোগ করা হয়নি।
+                </Text>
               ) : (
                 sheetData.dawatiTargets.map((item) => (
                   <View key={item.id} style={styles.subTableRow}>
-                    <Text style={[styles.subTd, { width: 45 }]}>{item.serial}</Text>
-                    <Text style={[styles.subTd, { flex: 2, fontWeight: '600' }]}>{item.name}</Text>
-                    <Text style={[styles.subTd, { flex: 1.3 }]}>{item.targetAddedDate}</Text>
-                    <Text style={[styles.subTd, { flex: 1.3 }]}>{item.lastContactDate}</Text>
+                    <Text style={[styles.subTd, { width: 45 }]}>
+                      {item.serial}
+                    </Text>
+                    <Text style={[styles.subTd, { flex: 2, fontWeight: '600' }]}>
+                      {item.name}
+                    </Text>
+                    <Text style={[styles.subTd, { flex: 1.3 }]}>
+                      {item.targetAddedDate}
+                    </Text>
+                    <Text style={[styles.subTd, { flex: 1.3 }]}>
+                      {item.lastContactDate}
+                    </Text>
                   </View>
                 ))
               )}
@@ -561,7 +671,9 @@ export default function SocialReligiousPage({
           {!sheetData.isKormiListVisible ? (
             <TouchableOpacity
               style={styles.revealListBtn}
-              onPress={() => saveSheetData({ ...sheetData, isKormiListVisible: true })}
+              onPress={() => {
+                void saveSheetData({ ...sheetData, isKormiListVisible: true });
+              }}
             >
               <Ionicons name="add-circle" size={20} color="#2E7D32" />
               <Text style={[styles.revealListBtnText, { color: '#2E7D32' }]}>
@@ -571,9 +683,16 @@ export default function SocialReligiousPage({
           ) : (
             <View style={styles.targetCard}>
               <View style={styles.targetCardHeader}>
-                <Text style={styles.targetCardTitle}>{currentReligionConfig?.kormiListTitle}</Text>
+                <Text style={styles.targetCardTitle}>
+                  {currentReligionConfig?.kormiListTitle}
+                </Text>
                 <TouchableOpacity
-                  onPress={() => saveSheetData({ ...sheetData, isKormiListVisible: false })}
+                  onPress={() => {
+                    void saveSheetData({
+                      ...sheetData,
+                      isKormiListVisible: false,
+                    });
+                  }}
                 >
                   <Text style={styles.hideText}>লুকান (Hide)</Text>
                 </TouchableOpacity>
@@ -596,15 +715,23 @@ export default function SocialReligiousPage({
 
               <View style={styles.subTableHeader}>
                 <Text style={[styles.subTh, { width: 60 }]}>সিরিয়াল</Text>
-                <Text style={[styles.subTh, { flex: 1 }]}>কর্মী টার্গেটের নাম</Text>
+                <Text style={[styles.subTh, { flex: 1 }]}>
+                  কর্মী টার্গেটের নাম
+                </Text>
               </View>
               {sheetData.kormiTargets.length === 0 ? (
-                <Text style={styles.emptyListHint}>এখনো কোনো কর্মী টার্গেট যোগ করা হয়নি।</Text>
+                <Text style={styles.emptyListHint}>
+                  এখনো কোনো কর্মী টার্গেট যোগ করা হয়নি।
+                </Text>
               ) : (
                 sheetData.kormiTargets.map((item) => (
                   <View key={item.id} style={styles.subTableRow}>
-                    <Text style={[styles.subTd, { width: 60 }]}>{item.serial}</Text>
-                    <Text style={[styles.subTd, { flex: 1, fontWeight: '600' }]}>{item.name}</Text>
+                    <Text style={[styles.subTd, { width: 60 }]}>
+                      {item.serial}
+                    </Text>
+                    <Text style={[styles.subTd, { flex: 1, fontWeight: '600' }]}>
+                      {item.name}
+                    </Text>
                   </View>
                 ))
               )}
@@ -660,20 +787,31 @@ export default function SocialReligiousPage({
                   <Text style={styles.religionOptionText}>
                     {index + 1}. {work}
                   </Text>
-                  <Ionicons name="checkmark-circle-outline" size={20} color="#2E7D32" />
+                  <Ionicons
+                    name="checkmark-circle-outline"
+                    size={20}
+                    color="#2E7D32"
+                  />
                 </TouchableOpacity>
               ))}
             </ScrollView>
             <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
               <TouchableOpacity
-                style={[styles.modalCloseBtn, { flex: 1, backgroundColor: '#FFEBEE' }]}
+                style={[
+                  styles.modalCloseBtn,
+                  { flex: 1, backgroundColor: '#FFEBEE' },
+                ]}
                 onPress={() => handleSelectSocialWork(null)}
               >
-                <Text style={[styles.modalCloseBtnText, { color: '#C62828' }]}>মুছে ফেলুন (FALSE)</Text>
+                <Text style={[styles.modalCloseBtnText, { color: '#C62828' }]}>
+                  মুছে ফেলুন (FALSE)
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalCloseBtn, { flex: 1 }]}
-                onPress={() => setSocialDropdownModal({ visible: false, day: null })}
+                onPress={() =>
+                  setSocialDropdownModal({ visible: false, day: null })
+                }
               >
                 <Text style={styles.modalCloseBtnText}>বন্ধ করুন</Text>
               </TouchableOpacity>
@@ -695,7 +833,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#F5F7FA',
   },
   loadingText: { fontSize: 16, color: '#555' },
-  emptyTitle: { fontSize: 20, fontWeight: '700', color: '#1B5E20', marginTop: 14 },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1B5E20',
+    marginTop: 14,
+  },
   emptySubtitle: {
     fontSize: 14,
     color: '#666',
@@ -726,7 +869,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E0E0E0',
   },
   headerTitle: { fontSize: 16, fontWeight: '700', color: '#1A1A1A' },
-  headerSub: { fontSize: 12, color: '#2E7D32', fontWeight: '600', marginTop: 2 },
+  headerSub: {
+    fontSize: 12,
+    color: '#2E7D32',
+    fontWeight: '600',
+    marginTop: 2,
+  },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   addColBtn: {
     flexDirection: 'row',
@@ -925,7 +1073,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#F0F0F0',
   },
   subTd: { fontSize: 12, color: '#212121' },
-  emptyListHint: { fontSize: 12, color: '#888', textAlign: 'center', paddingVertical: 12 },
+  emptyListHint: {
+    fontSize: 12,
+    color: '#888',
+    textAlign: 'center',
+    paddingVertical: 12,
+  },
 
   modalOverlay: {
     flex: 1,
@@ -938,7 +1091,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 18,
   },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: '#1A1A1A', marginBottom: 6 },
+  modalTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#1A1A1A',
+    marginBottom: 6,
+  },
   modalSub: { fontSize: 13, color: '#666', marginBottom: 12 },
   religionOptionBtn: {
     flexDirection: 'row',

@@ -15,6 +15,7 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { saveLocalData } from '../utils/firebaseSync';
 import { getCombinedIncomeForMonth } from '../utils/incomeSyncHelper';
 import {
   getBudgetShopDebtLink,
@@ -22,7 +23,6 @@ import {
   MonthlyDebtRecord,
   saveShopDebtPaymentFromBudget,
 } from '../utils/shopDebtBudgetSync';
-import { saveLocalData } from '../utils/firebaseSync';
 
 interface ShopProfile {
   id: string;
@@ -148,10 +148,6 @@ function getYearMonthForFiscalMonth(month: string, startYear: number): string {
   return `${calYear}-${mm}`;
 }
 
-/**
- * Budget-এর কোনো মাস `month` (যেমন November)-এর জন্য
- * Income যে মাস থেকে আসবে (যেমন October) সেই মাসের নাম ও fiscal startYear নির্ণয় করে।
- */
 function getPreviousFiscalMonthSource(
   month: string,
   startYear: number
@@ -163,7 +159,6 @@ function getPreviousFiscalMonthSource(
       sourceStartYear: startYear,
     };
   }
-  // July হলে আগের অর্থবছরের June থেকে Income আসবে
   return {
     sourceMonth: 'June',
     sourceStartYear: startYear - 1,
@@ -335,10 +330,16 @@ export default function BudgetScreen() {
   const visibleColumnsCount = isMobileScreen
     ? 2
     : Math.max(4, Math.floor((screenWidth - 215) / 114));
-  const rawRightWidth = Math.max(200, Math.floor(screenWidth - (isMobileScreen ? 136 : 215)));
+  const rawRightWidth = Math.max(
+    200,
+    Math.floor(screenWidth - (isMobileScreen ? 136 : 215))
+  );
   const monthColWidth = Math.floor(rawRightWidth / visibleColumnsCount);
   const exactRightViewportWidth = monthColWidth * visibleColumnsCount;
-  const descColWidth = Math.max(130, Math.floor(screenWidth) - exactRightViewportWidth);
+  const descColWidth = Math.max(
+    130,
+    Math.floor(screenWidth) - exactRightViewportWidth
+  );
 
   const gridSnapOffsets = useMemo(() => {
     const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
@@ -359,10 +360,14 @@ export default function BudgetScreen() {
     return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
   };
 
-  const [fiscalStartYear, setFiscalStartYear] = useState<number>(getInitialFiscalStartYear);
+  const [fiscalStartYear, setFiscalStartYear] = useState<number>(
+    getInitialFiscalStartYear
+  );
   const [rows, setRows] = useState<BudgetCategoryRow[]>([]);
 
-  const [monthNetSavings, setMonthNetSavings] = useState<{ [month: string]: number }>(() => {
+  const [monthNetSavings, setMonthNetSavings] = useState<{
+    [month: string]: number;
+  }>(() => {
     const obj: { [month: string]: number } = {};
     FISCAL_MONTHS.forEach((m) => {
       obj[m] = 0;
@@ -396,10 +401,14 @@ export default function BudgetScreen() {
         getVehicleExpensesByYearMonth(),
       ]);
 
-      const shopList: ShopProfile[] = shopsRaw ? (JSON.parse(shopsRaw) as ShopProfile[]) : [];
+      const shopList: ShopProfile[] = shopsRaw
+        ? (JSON.parse(shopsRaw) as ShopProfile[])
+        : [];
       const validShops = Array.isArray(shopList) ? shopList : [];
       const validShopIdsSet = new Set(validShops.map((s) => s.id));
-      const validVehicleIdsSet = new Set(vehicleData.vehicles.map((v) => v.vehicleId));
+      const validVehicleIdsSet = new Set(
+        vehicleData.vehicles.map((v) => v.vehicleId)
+      );
 
       let baseRows: BudgetCategoryRow[] = [];
 
@@ -474,7 +483,9 @@ export default function BudgetScreen() {
       vehicleData.vehicles.forEach((veh) => {
         const vRowId = `cat-veh-${veh.vehicleId}`;
         const existingIdx = baseRows.findIndex(
-          (r) => r.id === vRowId || (r.isVehicleRow && r.linkedVehicleId === veh.vehicleId)
+          (r) =>
+            r.id === vRowId ||
+            (r.isVehicleRow && r.linkedVehicleId === veh.vehicleId)
         );
         const title = `${veh.vehicleName} Expense`;
 
@@ -503,14 +514,17 @@ export default function BudgetScreen() {
       for (const month of FISCAL_MONTHS) {
         const ym = getYearMonthForFiscalMonth(month, startYr);
         const prevYM = getPrevYearMonth(ym);
-        const { sourceMonth, sourceStartYear } = getPreviousFiscalMonthSource(month, startYr);
+        const { sourceMonth, sourceStartYear } = getPreviousFiscalMonthSource(
+          month,
+          startYr
+        );
 
-        // উদাহরণ: Budget-এর November কলামে October-এর Income থেকে November-এর Savings বাদ যাবে
-        const [prevMonthIncome, currentMonthSavingsAmt, budgetRaw] = await Promise.all([
-          getCombinedIncomeForMonth(sourceMonth, sourceStartYear),
-          getSavingsForYearMonth(ym),
-          AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`),
-        ]);
+        const [prevMonthIncome, currentMonthSavingsAmt, budgetRaw] =
+          await Promise.all([
+            getCombinedIncomeForMonth(sourceMonth, sourceStartYear),
+            getSavingsForYearMonth(ym),
+            AsyncStorage.getItem(`${BUDGET_MONTH_KEY_PREFIX}${ym}`),
+          ]);
 
         const netSavCents =
           safeToCents(prevMonthIncome) - safeToCents(currentMonthSavingsAmt);
@@ -524,7 +538,9 @@ export default function BudgetScreen() {
 
         for (const row of baseRows) {
           if (row.isVehicleRow && row.linkedVehicleId) {
-            const vehMonthAmt = safeFromCents(safeToCents(monthVehicleMap[row.linkedVehicleId]));
+            const vehMonthAmt = safeFromCents(
+              safeToCents(monthVehicleMap[row.linkedVehicleId])
+            );
             row.amounts[month] = vehMonthAmt;
             row.cleared[month] = vehMonthAmt > 0;
           } else if (row.isShopDebtRow && row.linkedShopId) {
@@ -569,7 +585,9 @@ export default function BudgetScreen() {
             }
           } else {
             row.cleared[month] = Boolean(parsedMonth.rowCleared?.[row.id]);
-            row.amounts[month] = safeFromCents(safeToCents(parsedMonth.rowAmounts?.[row.id]));
+            row.amounts[month] = safeFromCents(
+              safeToCents(parsedMonth.rowAmounts?.[row.id])
+            );
           }
         }
       }
@@ -582,7 +600,8 @@ export default function BudgetScreen() {
         isVehicleRow: Boolean(r.isVehicleRow),
         linkedVehicleId: r.linkedVehicleId,
         isWelfareRow: r.id === WELFARE_ROW_ID || Boolean(r.isWelfareRow),
-        isUserAdded: !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
+        isUserAdded:
+          !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
       }));
       await saveLocalData(BUDGET_ROWS_META_KEY, metaPayload);
 
@@ -594,12 +613,12 @@ export default function BudgetScreen() {
   }, []);
 
   useEffect(() => {
-    loadFullYearBudget(fiscalStartYear);
+    void loadFullYearBudget(fiscalStartYear);
   }, [fiscalStartYear, loadFullYearBudget]);
 
   useFocusEffect(
     useCallback(() => {
-      loadFullYearBudget(fiscalStartYear);
+      void loadFullYearBudget(fiscalStartYear);
     }, [fiscalStartYear, loadFullYearBudget])
   );
 
@@ -646,7 +665,10 @@ export default function BudgetScreen() {
         if (monthColWidth <= 0) return;
         const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
         const rawRatio = offsetX / monthColWidth;
-        const targetIdx = Math.max(0, Math.min(maxStartIndex, Math.round(rawRatio)));
+        const targetIdx = Math.max(
+          0,
+          Math.min(maxStartIndex, Math.round(rawRatio))
+        );
         setActiveGridIndex(targetIdx);
 
         const exactTargetX = targetIdx * monthColWidth;
@@ -679,44 +701,52 @@ export default function BudgetScreen() {
 
   const persistRowsAndMonths = useCallback(
     async (updatedRows: BudgetCategoryRow[], touchedMonths: string[]) => {
-      setRows(updatedRows);
+      try {
+        setRows(updatedRows);
 
-      const metaPayload = updatedRows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        isShopDebtRow: Boolean(r.isShopDebtRow),
-        linkedShopId: r.linkedShopId,
-        isVehicleRow: Boolean(r.isVehicleRow),
-        linkedVehicleId: r.linkedVehicleId,
-        isWelfareRow: r.id === WELFARE_ROW_ID || Boolean(r.isWelfareRow),
-        isUserAdded: !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
-      }));
-      await saveLocalData(BUDGET_ROWS_META_KEY, metaPayload);
+        const metaPayload = updatedRows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          isShopDebtRow: Boolean(r.isShopDebtRow),
+          linkedShopId: r.linkedShopId,
+          isVehicleRow: Boolean(r.isVehicleRow),
+          linkedVehicleId: r.linkedVehicleId,
+          isWelfareRow: r.id === WELFARE_ROW_ID || Boolean(r.isWelfareRow),
+          isUserAdded:
+            !r.isShopDebtRow && !r.isVehicleRow && r.id !== WELFARE_ROW_ID,
+        }));
+        await saveLocalData(BUDGET_ROWS_META_KEY, metaPayload);
 
-      for (const month of touchedMonths) {
-        const ym = getYearMonthForFiscalMonth(month, fiscalStartYear);
-        const amountsMap: { [rowId: string]: number } = {};
-        const clearedMap: { [rowId: string]: boolean } = {};
-        let totalShopDebtVal = 0;
+        const uniqueMonths = Array.from(new Set(touchedMonths));
+        await Promise.all(
+          uniqueMonths.map(async (month) => {
+            const ym = getYearMonthForFiscalMonth(month, fiscalStartYear);
+            const amountsMap: { [rowId: string]: number } = {};
+            const clearedMap: { [rowId: string]: boolean } = {};
+            let totalShopDebtVal = 0;
 
-        updatedRows.forEach((r) => {
-          const val = safeFromCents(safeToCents(r.amounts[month]));
-          amountsMap[r.id] = val;
-          clearedMap[r.id] = r.isVehicleRow ? val > 0 : Boolean(r.cleared[month]);
-          if (r.isShopDebtRow) {
-            totalShopDebtVal += val;
-          }
-        });
+            updatedRows.forEach((r) => {
+              const val = safeFromCents(safeToCents(r.amounts[month]));
+              amountsMap[r.id] = val;
+              clearedMap[r.id] = r.isVehicleRow ? val > 0 : Boolean(r.cleared[month]);
+              if (r.isShopDebtRow) {
+                totalShopDebtVal += val;
+              }
+            });
 
-        const payload: MonthlyBudgetStorage = {
-          yearMonth: ym,
-          shopDebtPaid: totalShopDebtVal,
-          rowAmounts: amountsMap,
-          rowCleared: clearedMap,
-          updatedAt: new Date().toISOString(),
-        };
-        await saveLocalData(`${BUDGET_MONTH_KEY_PREFIX}${ym}`, payload);
-        await saveShopDebtPaymentFromBudget(ym, totalShopDebtVal);
+            const payload: MonthlyBudgetStorage = {
+              yearMonth: ym,
+              shopDebtPaid: totalShopDebtVal,
+              rowAmounts: amountsMap,
+              rowCleared: clearedMap,
+              updatedAt: new Date().toISOString(),
+            };
+            await saveLocalData(`${BUDGET_MONTH_KEY_PREFIX}${ym}`, payload);
+            await saveShopDebtPaymentFromBudget(ym, totalShopDebtVal);
+          })
+        );
+      } catch (e) {
+        console.log('Failed to persist budget changes:', e);
       }
     },
     [fiscalStartYear]
@@ -756,7 +786,9 @@ export default function BudgetScreen() {
     setEditingRow(row);
     setEditingMonth(month);
     setEditAmountText(String(currentVal));
-    setEditClearedState(row.isVehicleRow ? currentVal > 0 : Boolean(row.cleared[month]));
+    setEditClearedState(
+      row.isVehicleRow ? currentVal > 0 : Boolean(row.cleared[month])
+    );
     setApplyForward(false);
     setEditModalVisible(true);
   };
@@ -815,7 +847,9 @@ export default function BudgetScreen() {
   };
 
   const handleAddRow = async (overrideName?: string) => {
-    const cleanName = (overrideName !== undefined ? overrideName : newRowName).trim();
+    const cleanName = (
+      overrideName !== undefined ? overrideName : newRowName
+    ).trim();
     if (!cleanName) {
       Alert.alert('খাতের নাম লিখুন বা Suggestion নির্বাচন করুন।');
       return;
@@ -872,7 +906,9 @@ export default function BudgetScreen() {
             { width: monthColWidth },
             row.isShopDebtRow && !isCleared && styles.debtHighlightCell,
             row.isVehicleRow && !isCleared && styles.vehicleHighlightCell,
-            (row.id === WELFARE_ROW_ID || row.isWelfareRow) && !isCleared && styles.welfareHighlightCell,
+            (row.id === WELFARE_ROW_ID || row.isWelfareRow) &&
+              !isCleared &&
+              styles.welfareHighlightCell,
             isCleared && styles.clearedCellMark,
           ]}
         >
@@ -909,7 +945,10 @@ export default function BudgetScreen() {
           </Text>
         </View>
 
-        <TouchableOpacity style={styles.nowBtn} onPress={handleJumpToCurrentMonth}>
+        <TouchableOpacity
+          style={styles.nowBtn}
+          onPress={handleJumpToCurrentMonth}
+        >
           <Text style={styles.nowBtnText}>Now</Text>
         </TouchableOpacity>
 
@@ -961,34 +1000,62 @@ export default function BudgetScreen() {
               <Text style={styles.headerCellText}>Particulars</Text>
             </View>
 
-            <View style={[styles.summaryCell, styles.netSavingsBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]}>Net Savings</Text>
+            <View
+              style={[
+                styles.summaryCell,
+                styles.netSavingsBg,
+                { width: descColWidth },
+              ]}
+            >
+              <Text style={[styles.summaryTitle, { color: '#1E3A8A' }]}>
+                Net Savings
+              </Text>
             </View>
 
-            <View style={[styles.summaryCell, styles.totalBudgetBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#0F172A' }]}>Total Budget</Text>
+            <View
+              style={[
+                styles.summaryCell,
+                styles.totalBudgetBg,
+                { width: descColWidth },
+              ]}
+            >
+              <Text style={[styles.summaryTitle, { color: '#0F172A' }]}>
+                Total Budget
+              </Text>
             </View>
 
-            <View style={[styles.summaryCell, styles.extraBg, { width: descColWidth }]}>
-              <Text style={[styles.summaryTitle, { color: '#15803D' }]}>Extra / Ghatti</Text>
+            <View
+              style={[styles.summaryCell, styles.extraBg, { width: descColWidth }]}
+            >
+              <Text style={[styles.summaryTitle, { color: '#15803D' }]}>
+                Extra / Ghatti
+              </Text>
             </View>
 
             {rows.map((row) => {
-              const isWelfare = row.id === WELFARE_ROW_ID || Boolean(row.isWelfareRow);
+              const isWelfare =
+                row.id === WELFARE_ROW_ID || Boolean(row.isWelfareRow);
               return (
-                <View key={row.id} style={[styles.descCell, { width: descColWidth }]}>
+                <View
+                  key={row.id}
+                  style={[styles.descCell, { width: descColWidth }]}
+                >
                   <View style={{ flex: 1 }}>
                     <Text style={styles.descText} numberOfLines={2}>
                       {row.name}
                     </Text>
                     {isWelfare && (
-                      <Text style={styles.linkedWelfareBadge}>Welfare Fund Sync</Text>
+                      <Text style={styles.linkedWelfareBadge}>
+                        Welfare Fund Sync
+                      </Text>
                     )}
                     {row.isShopDebtRow && (
                       <Text style={styles.linkedShopBadge}>Shop Debt Sync</Text>
                     )}
                     {row.isVehicleRow && (
-                      <Text style={styles.linkedVehicleBadge}>Vehicle Sync • Cash Paid</Text>
+                      <Text style={styles.linkedVehicleBadge}>
+                        Vehicle Sync • Cash Paid
+                      </Text>
                     )}
                   </View>
 
@@ -998,7 +1065,11 @@ export default function BudgetScreen() {
                       accessibilityLabel="Delete row"
                       style={{ paddingLeft: 4 }}
                     >
-                      <Ionicons name="trash-outline" size={15} color="#DC2626" />
+                      <Ionicons
+                        name="trash-outline"
+                        size={15}
+                        color="#DC2626"
+                      />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -1046,9 +1117,15 @@ export default function BudgetScreen() {
                   {FISCAL_MONTHS.map((month) => (
                     <View
                       key={month}
-                      style={[styles.summaryCell, styles.netSavingsBg, { width: monthColWidth }]}
+                      style={[
+                        styles.summaryCell,
+                        styles.netSavingsBg,
+                        { width: monthColWidth },
+                      ]}
                     >
-                      <Text style={[styles.summaryValue, { color: '#1E3A8A' }]}>
+                      <Text
+                        style={[styles.summaryValue, { color: '#1E3A8A' }]}
+                      >
                         {formatMoney(monthlySummary[month]?.netSavings || 0)}
                       </Text>
                     </View>
@@ -1059,9 +1136,15 @@ export default function BudgetScreen() {
                   {FISCAL_MONTHS.map((month) => (
                     <View
                       key={month}
-                      style={[styles.summaryCell, styles.totalBudgetBg, { width: monthColWidth }]}
+                      style={[
+                        styles.summaryCell,
+                        styles.totalBudgetBg,
+                        { width: monthColWidth },
+                      ]}
                     >
-                      <Text style={[styles.summaryValue, { color: '#0F172A' }]}>
+                      <Text
+                        style={[styles.summaryValue, { color: '#0F172A' }]}
+                      >
                         {formatMoney(monthlySummary[month]?.totalBudget || 0)}
                       </Text>
                     </View>
@@ -1135,12 +1218,16 @@ export default function BudgetScreen() {
                 <TouchableOpacity
                   style={[
                     styles.clearStatusBtn,
-                    editClearedState ? styles.clearStatusBtnActive : styles.clearStatusBtnInactive,
+                    editClearedState
+                      ? styles.clearStatusBtnActive
+                      : styles.clearStatusBtnInactive,
                   ]}
                   onPress={handleRequestToggleClearedWithConfirm}
                 >
                   <Ionicons
-                    name={editClearedState ? 'checkmark-circle' : 'ellipse-outline'}
+                    name={
+                      editClearedState ? 'checkmark-circle' : 'ellipse-outline'
+                    }
                     size={18}
                     color={editClearedState ? '#15803D' : '#475569'}
                   />
@@ -1150,7 +1237,9 @@ export default function BudgetScreen() {
                       { color: editClearedState ? '#14532D' : '#334155' },
                     ]}
                   >
-                    {editClearedState ? 'Unmark Cleared Bill' : 'Mark Bill Cleared'}
+                    {editClearedState
+                      ? 'Unmark Cleared Bill'
+                      : 'Mark Bill Cleared'}
                   </Text>
                 </TouchableOpacity>
               </>
@@ -1165,7 +1254,9 @@ export default function BudgetScreen() {
                 size={22}
                 color="#2563EB"
               />
-              <Text style={styles.checkboxLabel}>Apply to remaining months up to June</Text>
+              <Text style={styles.checkboxLabel}>
+                Apply to remaining months up to June
+              </Text>
             </TouchableOpacity>
 
             <View style={styles.modalButtons}>
@@ -1173,11 +1264,13 @@ export default function BudgetScreen() {
                 style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                 onPress={() => setEditModalVisible(false)}
               >
-                <Text style={{ color: '#334155', fontWeight: '600' }}>Cancel</Text>
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  Cancel
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalBtn, { backgroundColor: '#2563EB' }]}
-                onPress={handleSaveCell}
+                onPress={() => void handleSaveCell()}
               >
                 <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Save</Text>
               </TouchableOpacity>
@@ -1195,7 +1288,9 @@ export default function BudgetScreen() {
             <View style={styles.modalCard}>
               <Text style={styles.modalTitle}>Add New Budget Item</Text>
 
-              <Text style={styles.inputLabel}>Custom Item Name (নিজের মতো নাম লিখুন)</Text>
+              <Text style={styles.inputLabel}>
+                Custom Item Name (নিজের মতো নাম লিখুন)
+              </Text>
               <TextInput
                 style={styles.modalInput}
                 placeholder="e.g. House Rent, Medical, Gas..."
@@ -1220,7 +1315,7 @@ export default function BudgetScreen() {
                   <TouchableOpacity
                     key={sug.id}
                     style={styles.suggestionChip}
-                    onPress={() => handleAddRow(sug.name)}
+                    onPress={() => void handleAddRow(sug.name)}
                   >
                     <Ionicons name="add" size={14} color="#1D4ED8" />
                     <Text style={styles.suggestionChipText}>{sug.name}</Text>
@@ -1233,13 +1328,17 @@ export default function BudgetScreen() {
                   style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
                   onPress={() => setAddModalVisible(false)}
                 >
-                  <Text style={{ color: '#334155', fontWeight: '600' }}>Cancel</Text>
+                  <Text style={{ color: '#334155', fontWeight: '600' }}>
+                    Cancel
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
-                  onPress={() => handleAddRow()}
+                  onPress={() => void handleAddRow()}
                 >
-                  <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>Add Custom</Text>
+                  <Text style={{ color: '#FFFFFF', fontWeight: '600' }}>
+                    Add Custom
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>

@@ -184,7 +184,7 @@ const formatVehicleType = (v: VehicleProfile): string => {
 export default function VehicleExpenseScreen() {
   const router = useRouter();
   const { manage: manageParam } = useLocalSearchParams<{ manage?: string }>();
-  const canManageVehicleData = manageParam === '1';
+  const canManageVehicleData = manageParam !== '0';
 
   const [store, setStore] = useState<VehicleStoreData>({
     vehicles: [],
@@ -1190,11 +1190,7 @@ export default function VehicleExpenseScreen() {
           <Ionicons name="arrow-back" size={22} color="#1E293B" />
         </TouchableOpacity>
         <View style={styles.headerTitleBox}>
-          <Text style={styles.headerTitle}>
-            {canManageVehicleData
-              ? 'Manage Vehicle Records'
-              : 'Vehicle Log & Expense Sheet'}
-          </Text>
+          <Text style={styles.headerTitle}>Vehicle Log & Expense Sheet</Text>
           <Text style={styles.headerSub}>
             {activeVehicle
               ? `${activeVehicle.name} (${formatVehicleType(activeVehicle)})`
@@ -1211,23 +1207,19 @@ export default function VehicleExpenseScreen() {
               কোনো Vehicle যুক্ত করা নেই
             </Text>
             <Text style={styles.emptyInitialSub}>
-              {canManageVehicleData
-                ? 'No vehicle is available to manage. Add a vehicle from the Vehicle page.'
-                : 'হিসাব শুরু করতে প্রথমে একটি Vehicle (Bike, Car বা Other) যোগ করুন।'}
+              হিসাব শুরু করতে প্রথমে একটি Vehicle (Bike, Car বা Other) যোগ করুন।
             </Text>
-            {!canManageVehicleData && (
-              <TouchableOpacity
-                style={styles.primaryAddVehicleBtn}
-                onPress={openAddVehicleModal}
-              >
-                <Ionicons
-                  name="add-circle-outline"
-                  size={20}
-                  color="#FFFFFF"
-                />
-                <Text style={styles.primaryAddVehicleText}>Add Vehicle</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={styles.primaryAddVehicleBtn}
+              onPress={openAddVehicleModal}
+            >
+              <Ionicons
+                name="add-circle-outline"
+                size={20}
+                color="#FFFFFF"
+              />
+              <Text style={styles.primaryAddVehicleText}>Add Vehicle</Text>
+            </TouchableOpacity>
           </View>
         </View>
       ) : (
@@ -1276,38 +1268,32 @@ export default function VehicleExpenseScreen() {
               </View>
             </ScrollView>
 
-            {!canManageVehicleData && (
-              <TouchableOpacity
-                style={styles.addVehicleBtn}
-                onPress={openAddVehicleModal}
-              >
-                <Ionicons
-                  name="add-circle-outline"
-                  size={15}
-                  color="#1D4ED8"
-                />
-                <Text style={styles.addVehicleBtnText}>+ Vehicle</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity
+              style={styles.addVehicleBtn}
+              onPress={openAddVehicleModal}
+            >
+              <Ionicons
+                name="add-circle-outline"
+                size={15}
+                color="#1D4ED8"
+              />
+              <Text style={styles.addVehicleBtnText}>+ Vehicle</Text>
+            </TouchableOpacity>
 
-            {canManageVehicleData && (
-              <>
-                <TouchableOpacity
-                  style={styles.profileActionBtn}
-                  onPress={() => openEditVehicleModal(activeVehicle)}
-                  accessibilityLabel="Edit selected vehicle"
-                >
-                  <Ionicons name="create-outline" size={16} color="#1D4ED8" />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.profileActionBtn}
-                  onPress={handleDeleteActiveVehicle}
-                  accessibilityLabel="Delete selected vehicle"
-                >
-                  <Ionicons name="trash-outline" size={16} color="#DC2626" />
-                </TouchableOpacity>
-              </>
-            )}
+            <TouchableOpacity
+              style={styles.profileActionBtn}
+              onPress={() => openEditVehicleModal(activeVehicle)}
+              accessibilityLabel="Edit selected vehicle"
+            >
+              <Ionicons name="create-outline" size={16} color="#1D4ED8" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.profileActionBtn}
+              onPress={handleDeleteActiveVehicle}
+              accessibilityLabel="Delete selected vehicle"
+            >
+              <Ionicons name="trash-outline" size={16} color="#DC2626" />
+            </TouchableOpacity>
           </View>
 
           {activePendingFuel && (
@@ -1318,24 +1304,21 @@ export default function VehicleExpenseScreen() {
                   {activePendingFuel.date})
                 </Text>
                 <Text style={styles.pendingSub}>
-                  {canManageVehicleData
-                    ? '"+ Fuel (Load)" চাপলে Date ও Reading দুটোই অটো বসে যাবে।'
-                    : 'This pending reading can be used from Vehicle Management in Settings.'}
+                  &ldquo;+ Fuel (Load)&rdquo; চাপলে Date ও Reading দুটোই অটো বসে
+                  যাবে।
                 </Text>
               </View>
-              {canManageVehicleData && (
-                <TouchableOpacity
-                  onPress={requestCancelPendingFinish}
-                  style={styles.pendingClearBtn}
-                >
-                  <Ionicons
-                    name="lock-closed-outline"
-                    size={12}
-                    color="#92400E"
-                  />
-                  <Text style={styles.pendingClearText}>বাতিল</Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                onPress={requestCancelPendingFinish}
+                style={styles.pendingClearBtn}
+              >
+                <Ionicons
+                  name="lock-closed-outline"
+                  size={12}
+                  color="#92400E"
+                />
+                <Text style={styles.pendingClearText}>বাতিল</Text>
+              </TouchableOpacity>
             </View>
           )}
 
@@ -1541,9 +1524,8 @@ export default function VehicleExpenseScreen() {
                 {displayRows.length === 0 ? (
                   <View style={styles.emptyRow}>
                     <Text style={styles.emptyText}>
-                      {canManageVehicleData
-                        ? 'কোনো এন্ট্রি নেই। Fuel Finish Reading, + Fuel (Load) বা + Servicing চাপুন।'
-                        : 'No vehicle records are available.'}
+                      কোনো এন্ট্রি নেই। Fuel Finish Reading, + Fuel (Load) বা +
+                      Servicing চাপুন।
                     </Text>
                   </View>
                 ) : (

@@ -1,7 +1,7 @@
-
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Link, useRouter } from 'expo-router';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,7 +19,11 @@ import {
   fetchAllFirebaseData,
   saveSnapshotToFirebase,
 } from '../utils/firebaseSync';
-import { syncUserAccountOnLogin } from '../utils/guestAuthSync';
+import {
+  getGuestSnapshot,
+  isGuestModeActive,
+  syncUserAccountOnLogin,
+} from '../utils/guestAuthSync';
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -29,8 +33,37 @@ export default function RegisterScreen() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [isGuestSession, setIsGuestSession] = useState(false);
+  const [guestItemCount, setGuestItemCount] = useState(0);
+
+  useEffect(() => {
+    let active = true;
+    const checkGuestStatus = async () => {
+      try {
+        const [guestActive, savedGuest] = await Promise.all([
+          isGuestModeActive(),
+          getGuestSnapshot(),
+        ]);
+        if (!active) return;
+        setIsGuestSession(guestActive);
+        setGuestItemCount(Object.keys(savedGuest).length);
+      } catch {
+        if (!active) return;
+        setIsGuestSession(false);
+        setGuestItemCount(0);
+      }
+    };
+    void checkGuestStatus();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const confirmLegacyDataImport = (dataGroupCount: number) => {
+    if (isGuestSession) {
+      return Promise.resolve(true);
+    }
+
     const message =
       `${dataGroupCount} unassigned local data group(s) were found on this device. ` +
       'Their previous account cannot be determined. Import them into this account? ' +
@@ -75,37 +108,41 @@ export default function RegisterScreen() {
     setLoading(true);
 
     try {
-      // Create new Firebase account
       const credential = await createUserWithEmailAndPassword(
         auth,
         email.trim(),
         password
       );
 
-      // Save user's display name
       await updateProfile(credential.user, {
         displayName: name.trim(),
       });
 
-      // Sync Guest/Local data with the new registered account
-      await syncUserAccountOnLogin({
+      const result = await syncUserAccountOnLogin({
         userId: credential.user.uid,
         email: credential.user.email,
         displayName: name.trim(),
         confirmLegacyDataImport,
-
-        // Fetch existing cloud data
         fetchCloudDataFn: async (uid) => {
           return await fetchAllFirebaseData(uid);
         },
-
-        // Upload Guest data when cloud is empty
         saveCloudDataFn: async (uid, data) => {
           await saveSnapshotToFirebase(uid, data);
         },
       });
 
-      router.replace('/dashboard');
+      await AsyncStorage.removeItem('@mybudget_pending_guest_migration_v1');
+      setIsGuestSession(false);
+
+      if (result.syncedGuestCount > 0) {
+        Alert.alert(
+          'Account Created & Data Transferred',
+          'Your Guest data has been transferred to your new registered account.',
+          [{ text: 'Continue', onPress: () => router.replace('/') }]
+        );
+      } else {
+        router.replace('/');
+      }
     } catch (error: any) {
       const messages: Record<string, string> = {
         'auth/email-already-in-use': 'This email is already registered.',
@@ -136,8 +173,23 @@ export default function RegisterScreen() {
           <Text style={styles.logo}>My Budget</Text>
           <Text style={styles.heading}>Create Account</Text>
           <Text style={styles.subtitle}>
-            Start managing your finances today. Your local data will stay synced.
+            {isGuestSession
+              ? 'Register a new account now to transfer your Guest entries safely.'
+              : 'Start managing your finances today. Your local data will stay synced.'}
           </Text>
+
+          {isGuestSession && (
+            <View style={styles.guestBanner}>
+              <Text style={styles.guestBannerTitle}>
+                Guest Mode Active — Transfer to Registered Account
+              </Text>
+              <Text style={styles.guestBannerText}>
+                {guestItemCount > 0
+                  ? `${guestItemCount} saved Guest data group(s) are ready to transfer into your new account.`
+                  : 'Any entries you made as a Guest will be transferred to your new account upon registration.'}
+              </Text>
+            </View>
+          )}
 
           <Text style={styles.label}>Full Name</Text>
           <TextInput
@@ -187,13 +239,17 @@ export default function RegisterScreen() {
 
           <TouchableOpacity
             style={[styles.button, loading && styles.disabledButton]}
-            onPress={handleRegister}
+            onPress={() => void handleRegister()}
             disabled={loading}
           >
             {loading ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.buttonText}>Create Account & Sync Data</Text>
+              <Text style={styles.buttonText}>
+                {isGuestSession
+                  ? 'Register & Transfer Guest Data'
+                  : 'Create Account & Sync Data'}
+              </Text>
             )}
           </TouchableOpacity>
 
@@ -217,14 +273,33 @@ const styles = StyleSheet.create({
     color: '#2563EB',
     fontSize: 24,
     fontWeight: 'bold',
-    marginBottom: 25,
+    marginBottom: 20,
   },
   heading: { fontSize: 25, fontWeight: 'bold', color: '#172554' },
   subtitle: {
     color: '#64748B',
     marginTop: 6,
-    marginBottom: 20,
+    marginBottom: 16,
     lineHeight: 20,
+  },
+  guestBanner: {
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 14,
+  },
+  guestBannerTitle: {
+    color: '#1E3A8A',
+    fontWeight: '700',
+    fontSize: 13.5,
+    marginBottom: 3,
+  },
+  guestBannerText: {
+    color: '#1E40AF',
+    fontSize: 12,
+    lineHeight: 17,
   },
   label: {
     color: '#334155',

@@ -5,23 +5,23 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as Sharing from 'expo-sharing';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    SafeAreaView,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    useWindowDimensions,
-    View,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  useWindowDimensions,
+  View,
 } from 'react-native';
 import { saveLocalData } from '../utils/firebaseSync';
 
-const FISCAL_MONTHS = [
+export const FISCAL_MONTHS = [
   'July',
   'August',
   'September',
@@ -38,25 +38,31 @@ const FISCAL_MONTHS = [
 
 const SECOND_HALF_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June'];
 
-type ItemType = 'income' | 'deduction';
-type CellMode = 'fixed' | 'percent';
-type IncomeProfileKind = 'salary' | 'daily' | 'business' | 'custom';
+export type ItemType = 'income' | 'deduction';
+export type CellMode = 'fixed' | 'percent';
+export type PercentBase = 'old_basic' | 'new_basic';
+export type BasicRole = 'normal' | 'old' | 'new';
+export type IncomeProfileKind = 'salary' | 'daily' | 'business' | 'custom';
 
-interface CellConfig {
+export interface CellConfig {
   mode: CellMode;
   value: number;
+  percentBase?: PercentBase;
 }
 
-interface IncomeRow {
+export interface IncomeRow {
   id: string;
   description: string;
   type: ItemType;
   isBasic?: boolean;
+  basicRole?: BasicRole;
+  effectiveFromMonth?: string;
+  removedFromMonth?: string;
   hidden?: boolean;
   cells: { [month: string]: CellConfig };
 }
 
-interface DailyIncomeEntry {
+export interface DailyIncomeEntry {
   id: string;
   date: string;
   month: string;
@@ -65,7 +71,7 @@ interface DailyIncomeEntry {
   note?: string;
 }
 
-interface IncomeSheetProfile {
+export interface IncomeSheetProfile {
   id: string;
   title: string;
   kind: IncomeProfileKind;
@@ -73,7 +79,7 @@ interface IncomeSheetProfile {
   dailyEntries?: DailyIncomeEntry[];
 }
 
-interface FiscalYearStore {
+export interface FiscalYearStore {
   initialized: boolean;
   activeSheetId: string | null;
   sheets: IncomeSheetProfile[];
@@ -92,10 +98,13 @@ const parseNumericValue = (val: unknown): number => {
   return 0;
 };
 
-const formatFiscalYearLabel = (startYear: number) => {
+export const formatFiscalYearLabel = (startYear: number) => {
   const nextTwoDigits = String((startYear + 1) % 100).padStart(2, '0');
   return `${startYear}-${nextTwoDigits}`;
 };
+
+export const getIncomeStorageKey = (startYr: number) =>
+  `@income_fy_${startYr}_${startYr + 1}`;
 
 const getMonthCalendarYear = (month: string, startYear: number) => {
   const idx = FISCAL_MONTHS.indexOf(month);
@@ -131,16 +140,70 @@ const getTodayIsoDate = (): string => {
 
 const buildDefaultCells = (
   mode: CellMode,
-  val: number
+  val: number,
+  percentBase?: PercentBase
 ): { [month: string]: CellConfig } => {
   const obj: { [month: string]: CellConfig } = {};
   FISCAL_MONTHS.forEach((m) => {
-    obj[m] = { mode, value: parseNumericValue(val) };
+    obj[m] = {
+      mode,
+      value: parseNumericValue(val),
+      ...(percentBase ? { percentBase } : {}),
+    };
   });
   return obj;
 };
 
-const createSalarySheetRows = (
+const isOldReferenceBasicRow = (row: IncomeRow): boolean => {
+  if (row.basicRole === 'old') return true;
+  const desc = row.description.trim().toLowerCase();
+  return desc.includes('(old)') && (row.isBasic || desc.includes('basic'));
+};
+
+const isNewBasicRow = (row: IncomeRow): boolean => {
+  if (row.basicRole === 'new') return true;
+  const desc = row.description.trim().toLowerCase();
+  return desc === 'new basic';
+};
+
+const hasNewBasicInSheet = (rows: IncomeRow[]): boolean =>
+  rows.some((r) => !r.hidden && isNewBasicRow(r));
+
+const getNewBasicRemovedFromIndex = (rows: IncomeRow[]): number => {
+  const newRow = rows.find((r) => !r.hidden && isNewBasicRow(r));
+  if (!newRow?.removedFromMonth) return FISCAL_MONTHS.length;
+  const idx = FISCAL_MONTHS.indexOf(newRow.removedFromMonth);
+  return idx >= 0 ? idx : FISCAL_MONTHS.length;
+};
+
+const isNewBasicActiveInMonth = (rows: IncomeRow[], month: string): boolean => {
+  const newRow = rows.find((r) => !r.hidden && isNewBasicRow(r));
+  if (!newRow) return false;
+
+  const monthIdx = FISCAL_MONTHS.indexOf(month);
+  if (monthIdx < 0) return false;
+
+  const startIdx = FISCAL_MONTHS.indexOf(newRow.effectiveFromMonth || 'July');
+  const removedFromIdx = getNewBasicRemovedFromIndex(rows);
+
+  if (startIdx >= 0 && monthIdx < startIdx) return false;
+  if (monthIdx >= removedFromIdx) return false;
+
+  return true;
+};
+
+const isOldBasicCountedInTotalForMonth = (
+  rows: IncomeRow[],
+  row: IncomeRow,
+  month: string
+): boolean => {
+  if (!isOldReferenceBasicRow(row)) return true;
+  if (!hasNewBasicInSheet(rows)) return true;
+
+  return !isNewBasicActiveInMonth(rows, month);
+};
+
+export const createSalarySheetRows = (
   initialBasic = 0,
   applyAllMonths = true,
   startMonth = 'July'
@@ -169,13 +232,14 @@ const createSalarySheetRows = (
       description: 'Net Basic',
       type: 'income',
       isBasic: true,
+      basicRole: 'normal',
       cells: buildDefaultCells('fixed', 0),
     },
     {
       id: 'row-house-rent',
       description: 'House Rent',
       type: 'income',
-      cells: buildDefaultCells('percent', 50),
+      cells: buildDefaultCells('percent', 50, 'old_basic'),
     },
     {
       id: 'row-medical-allow',
@@ -269,7 +333,7 @@ const createSalarySheetRows = (
   return baseRows;
 };
 
-const createBusinessSheetRows = (initialAmount = 0): IncomeRow[] => {
+export const createBusinessSheetRows = (initialAmount = 0): IncomeRow[] => {
   const currentMonth = getCurrentFiscalMonthName();
   const rows: IncomeRow[] = [
     {
@@ -305,7 +369,7 @@ const createBusinessSheetRows = (initialAmount = 0): IncomeRow[] => {
   return rows;
 };
 
-const createCustomSheetRows = (
+export const createCustomSheetRows = (
   customItemLabel: string,
   initialAmount = 0
 ): IncomeRow[] => {
@@ -339,16 +403,41 @@ const normalizeRow = (r: any): IncomeRow => {
   FISCAL_MONTHS.forEach((m) => {
     const rawCell = cleanRow.cells?.[m];
     const mode: CellMode = rawCell?.mode === 'percent' ? 'percent' : 'fixed';
+    const percentBase: PercentBase | undefined =
+      rawCell?.percentBase === 'old_basic' || rawCell?.percentBase === 'new_basic'
+        ? rawCell.percentBase
+        : undefined;
+
     normalizedCells[m] = {
       mode,
       value: parseNumericValue(rawCell?.value),
+      ...(percentBase ? { percentBase } : {}),
     };
   });
+
+  const description = String(cleanRow.description || 'Item');
+  let basicRole: BasicRole | undefined = cleanRow.basicRole;
+  if (!basicRole && (cleanRow.isBasic || cleanRow.id === 'row-net-basic')) {
+    const lower = description.trim().toLowerCase();
+    if (lower.includes('(old)')) basicRole = 'old';
+    else if (lower === 'new basic') basicRole = 'new';
+    else basicRole = 'normal';
+  }
+
   return {
     id: String(cleanRow.id || `row-${Math.random().toString(36).slice(2, 8)}`),
-    description: String(cleanRow.description || 'Item'),
+    description,
     type: cleanRow.type === 'deduction' ? 'deduction' : 'income',
-    isBasic: Boolean(cleanRow.isBasic),
+    isBasic: Boolean(cleanRow.isBasic || basicRole),
+    basicRole,
+    effectiveFromMonth:
+      typeof cleanRow.effectiveFromMonth === 'string'
+        ? cleanRow.effectiveFromMonth
+        : undefined,
+    removedFromMonth:
+      typeof cleanRow.removedFromMonth === 'string'
+        ? cleanRow.removedFromMonth
+        : undefined,
     hidden: Boolean(cleanRow.hidden),
     cells: normalizedCells,
   };
@@ -377,13 +466,13 @@ const ensureSalarySystemRows = (rows: IncomeRow[]): IncomeRow[] => {
   return next;
 };
 
-const EMPTY_YEAR_STORE: FiscalYearStore = {
+export const EMPTY_YEAR_STORE: FiscalYearStore = {
   initialized: false,
   activeSheetId: null,
   sheets: [],
 };
 
-const parseYearStore = (raw: string | null): FiscalYearStore => {
+export const parseYearStore = (raw: string | null): FiscalYearStore => {
   if (!raw) return EMPTY_YEAR_STORE;
   try {
     const parsed = JSON.parse(raw);
@@ -441,6 +530,73 @@ const parseYearStore = (raw: string | null): FiscalYearStore => {
   return EMPTY_YEAR_STORE;
 };
 
+const isRowCountedInTotalForMonth = (
+  rows: IncomeRow[],
+  row: IncomeRow,
+  month: string
+): boolean => {
+  if (row.hidden) return false;
+  if (isOldReferenceBasicRow(row)) {
+    return isOldBasicCountedInTotalForMonth(rows, row, month);
+  }
+  if (isNewBasicRow(row)) {
+    return isNewBasicActiveInMonth(rows, month);
+  }
+  return true;
+};
+
+const getPercentBaseAmountForMonth = (
+  rows: IncomeRow[],
+  month: string,
+  percentBase?: PercentBase
+): number => {
+  const oldRow = rows.find((r) => !r.hidden && isOldReferenceBasicRow(r));
+  const newRow = rows.find((r) => !r.hidden && isNewBasicRow(r));
+  const normalRow = rows.find(
+    (r) =>
+      !r.hidden &&
+      !isOldReferenceBasicRow(r) &&
+      !isNewBasicRow(r) &&
+      (r.isBasic || r.description.trim().toLowerCase() === 'net basic')
+  );
+
+  const oldVal = oldRow ? parseNumericValue(oldRow.cells?.[month]?.value) : 0;
+  const newVal = newRow ? parseNumericValue(newRow.cells?.[month]?.value) : 0;
+  const normalVal = normalRow
+    ? parseNumericValue(normalRow.cells?.[month]?.value)
+    : 0;
+
+  if (percentBase === 'old_basic') {
+    return oldVal > 0 ? oldVal : normalVal;
+  }
+  if (percentBase === 'new_basic') {
+    return newVal > 0 ? newVal : normalVal;
+  }
+
+  return normalVal || newVal || oldVal;
+};
+
+const resolveRowAmountForMonth = (
+  rows: IncomeRow[],
+  row: IncomeRow,
+  month: string
+): number => {
+  if (row.hidden) return 0;
+  const cell = row.cells?.[month];
+  if (!cell) return 0;
+
+  const val = parseNumericValue(cell.value);
+  if (val === 0) return 0;
+
+  if (cell.mode === 'percent') {
+    const base = getPercentBaseAmountForMonth(rows, month, cell.percentBase);
+    const cents = Math.round(Math.round(base * 100) * val) / 100;
+    return Math.round(cents) / 100;
+  }
+
+  return Math.round(val * 100) / 100;
+};
+
 export async function getCombinedIncomeSummaryForFiscalYear(
   startYear: number
 ): Promise<{
@@ -453,9 +609,7 @@ export async function getCombinedIncomeSummaryForFiscalYear(
   });
 
   try {
-    const raw = await AsyncStorage.getItem(
-      `@income_fy_${startYear}_${startYear + 1}`
-    );
+    const raw = await AsyncStorage.getItem(getIncomeStorageKey(startYear));
     const parsedStore = parseYearStore(raw);
 
     for (const sheet of parsedStore.sheets) {
@@ -466,23 +620,11 @@ export async function getCombinedIncomeSummaryForFiscalYear(
           }
         });
       } else {
-        const basicRow = sheet.rows.find(
-          (r) =>
-            !r.hidden &&
-            (r.isBasic || r.description.trim().toLowerCase() === 'net basic')
-        );
         FISCAL_MONTHS.forEach((m) => {
-          const basicVal = basicRow
-            ? parseNumericValue(basicRow.cells?.[m]?.value)
-            : 0;
           let monthNet = 0;
           sheet.rows.forEach((row) => {
-            if (row.hidden) return;
-            const cell = row.cells?.[m];
-            if (!cell) return;
-            const v = parseNumericValue(cell.value);
-            const resolved =
-              cell.mode === 'percent' ? Math.round((basicVal * v) / 100) : v;
+            if (!isRowCountedInTotalForMonth(sheet.rows, row, m)) return;
+            const resolved = resolveRowAmountForMonth(sheet.rows, row, m);
             if (row.type === 'income') {
               monthNet += resolved;
             } else {
@@ -506,10 +648,12 @@ export async function getCombinedIncomeSummaryForFiscalYear(
 
 export default function IncomeSheetScreen() {
   const router = useRouter();
-  const { manageSheets: manageSheetsParam } = useLocalSearchParams<{
+  const params = useLocalSearchParams<{
+    sheetId?: string;
+    fiscalStartYear?: string;
     manageSheets?: string;
   }>();
-  const isSettingsManageMode = manageSheetsParam === '1';
+  const isSettingsManageMode = params.manageSheets === '1';
   const { width: screenWidth } = useWindowDimensions();
 
   const isMobileScreen = screenWidth < 768;
@@ -541,15 +685,40 @@ export default function IncomeSheetScreen() {
   const [activeGridIndex, setActiveGridIndex] = useState<number>(0);
 
   const getInitialFiscalStartYear = () => {
+    const parsedParamYear = Number(params.fiscalStartYear);
+    if (Number.isInteger(parsedParamYear) && parsedParamYear >= 1990) {
+      return parsedParamYear;
+    }
     const now = new Date();
     return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
   };
+
+  const getCurrentFiscalMonthIndex = useCallback(() => {
+    const currentMonthName = getCurrentFiscalMonthName();
+    const idx = FISCAL_MONTHS.indexOf(currentMonthName);
+    if (idx < 0) return 0;
+    const maxStartIndex = Math.max(0, FISCAL_MONTHS.length - visibleColumnsCount);
+    return Math.min(idx, maxStartIndex);
+  }, [visibleColumnsCount]);
 
   const [fiscalStartYear, setFiscalStartYear] = useState<number>(
     getInitialFiscalStartYear
   );
   const [store, setStore] = useState<FiscalYearStore>(EMPTY_YEAR_STORE);
   const [exportingPdf, setExportingPdf] = useState<boolean>(false);
+
+  const [settingsMenuVisible, setSettingsMenuVisible] = useState<boolean>(false);
+
+  // New Basic যোগ বা নির্দিষ্ট মাস থেকে রিমুভ করার মোডাল স্টেট
+  const [newBasicModalVisible, setNewBasicModalVisible] =
+    useState<boolean>(false);
+  const [newBasicModalMode, setNewBasicModalMode] = useState<'add' | 'remove'>(
+    'add'
+  );
+  const [newBasicEffectiveMonth, setNewBasicEffectiveMonth] =
+    useState<string>('January');
+  const [removeNewBasicFromMonth, setRemoveNewBasicFromMonth] =
+    useState<string>('July');
 
   const [pdfActionModalVisible, setPdfActionModalVisible] =
     useState<boolean>(false);
@@ -581,6 +750,7 @@ export default function IncomeSheetScreen() {
   const [newDesc, setNewDesc] = useState('');
   const [newType, setNewType] = useState<ItemType>('income');
   const [newMode, setNewMode] = useState<CellMode>('fixed');
+  const [newPercentBase, setNewPercentBase] = useState<PercentBase>('old_basic');
   const [newDefaultVal, setNewDefaultVal] = useState('');
   const [applyToAllMonths, setApplyToAllMonths] = useState(false);
   const [selectedStartMonth, setSelectedStartMonth] = useState<string>('July');
@@ -589,23 +759,30 @@ export default function IncomeSheetScreen() {
   const [editingRow, setEditingRow] = useState<IncomeRow | null>(null);
   const [editingMonth, setEditingMonth] = useState<string>('July');
   const [editMode, setEditMode] = useState<CellMode>('fixed');
+  const [editPercentBase, setEditPercentBase] =
+    useState<PercentBase>('old_basic');
   const [editValue, setEditValue] = useState<string>('0');
   const [applyForward, setApplyForward] = useState<boolean>(false);
 
   const fiscalLabel = formatFiscalYearLabel(fiscalStartYear);
-  const getStorageKey = (startYr: number) => `@income_fy_${startYr}_${startYr + 1}`;
 
   const activeSheet = useMemo<IncomeSheetProfile | null>(() => {
     if (!store.initialized || store.sheets.length === 0) return null;
+    if (params.sheetId) {
+      const matched = store.sheets.find((s) => s.id === params.sheetId);
+      if (matched) return matched;
+    }
     return (
       store.sheets.find((s) => s.id === store.activeSheetId) || store.sheets[0]
     );
-  }, [store]);
+  }, [store, params.sheetId]);
 
   const rows = useMemo<IncomeRow[]>(
     () => activeSheet?.rows || [],
     [activeSheet]
   );
+
+  const hasNewBasic = useMemo(() => hasNewBasicInSheet(rows), [rows]);
 
   const snapToGridIndex = useCallback(
     (targetIdx: number, animated = true) => {
@@ -623,16 +800,31 @@ export default function IncomeSheetScreen() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const saved = await AsyncStorage.getItem(getStorageKey(fiscalStartYear));
-        setStore(parseYearStore(saved));
-        setTimeout(() => snapToGridIndex(0, false), 50);
+        const saved = await AsyncStorage.getItem(
+          getIncomeStorageKey(fiscalStartYear)
+        );
+        const parsed = parseYearStore(saved);
+        if (
+          params.sheetId &&
+          parsed.sheets.some((s) => s.id === params.sheetId)
+        ) {
+          setStore({ ...parsed, activeSheetId: params.sheetId });
+        } else {
+          setStore(parsed);
+        }
+        setTimeout(() => snapToGridIndex(getCurrentFiscalMonthIndex(), false), 60);
       } catch (e) {
         console.log('Failed to load income year sheet:', e);
         setStore(EMPTY_YEAR_STORE);
       }
     };
     void loadData();
-  }, [fiscalStartYear, snapToGridIndex]);
+  }, [
+    fiscalStartYear,
+    params.sheetId,
+    snapToGridIndex,
+    getCurrentFiscalMonthIndex,
+  ]);
 
   const persistStore = useCallback(
     async (startYr: number, nextStore: FiscalYearStore) => {
@@ -640,7 +832,7 @@ export default function IncomeSheetScreen() {
         if (startYr === fiscalStartYear) {
           setStore(nextStore);
         }
-        await saveLocalData(getStorageKey(startYr), nextStore);
+        await saveLocalData(getIncomeStorageKey(startYr), nextStore);
       } catch (e) {
         console.log('Failed to save income year store:', e);
       }
@@ -651,12 +843,15 @@ export default function IncomeSheetScreen() {
   const saveRowsForActiveSheet = useCallback(
     async (startYr: number, updatedRows: IncomeRow[]) => {
       try {
-        const currentRaw = await AsyncStorage.getItem(getStorageKey(startYr));
+        const currentRaw = await AsyncStorage.getItem(
+          getIncomeStorageKey(startYr)
+        );
         const baseStore =
           startYr === fiscalStartYear ? store : parseYearStore(currentRaw);
 
         if (!baseStore.sheets.length) return;
-        const targetSheetId = baseStore.activeSheetId || baseStore.sheets[0].id;
+        const targetSheetId =
+          activeSheet?.id || baseStore.activeSheetId || baseStore.sheets[0].id;
 
         const updatedSheets = baseStore.sheets.map((s) =>
           s.id === targetSheetId ? { ...s, rows: updatedRows } : s
@@ -672,15 +867,196 @@ export default function IncomeSheetScreen() {
         console.log('Failed to save income sheet rows:', e);
       }
     },
-    [fiscalStartYear, persistStore, store]
+    [activeSheet?.id, fiscalStartYear, persistStore, store]
   );
+
+  const openAddNewBasicModal = () => {
+    setSettingsMenuVisible(false);
+    if (!activeSheet || activeSheet.kind !== 'salary') return;
+    const existingNew = rows.find((r) => isNewBasicRow(r));
+    setNewBasicModalMode('add');
+    setNewBasicEffectiveMonth(existingNew?.effectiveFromMonth || 'January');
+    setNewBasicModalVisible(true);
+  };
+
+  const openRemoveNewBasicModal = () => {
+    setSettingsMenuVisible(false);
+    if (!activeSheet || activeSheet.kind !== 'salary' || !hasNewBasicInSheet(rows)) {
+      return;
+    }
+    const currentMonth = getCurrentFiscalMonthName();
+    const defaultRemoveMonth = FISCAL_MONTHS.includes(currentMonth)
+      ? currentMonth
+      : 'January';
+    setNewBasicModalMode('remove');
+    setRemoveNewBasicFromMonth(defaultRemoveMonth);
+    setNewBasicModalVisible(true);
+  };
+
+  // রিমুভ করার পর আবার নতুন করে New Basic যোগ/আপডেট করলে ডুপ্লিকেট হবে না এবং নতুন মাস থেকে সক্রিয় হবে
+  const handleConfirmAddNewBasicRow = async () => {
+    if (!activeSheet || activeSheet.kind !== 'salary') return;
+
+    const effMonth = newBasicEffectiveMonth || 'July';
+    const effIdx = FISCAL_MONTHS.indexOf(effMonth);
+    const existingNewBasic = rows.find((r) => isNewBasicRow(r));
+
+    const updatedExistingRows = rows.map((r) => {
+      if (isNewBasicRow(r)) {
+        const nextCells = { ...r.cells };
+        if (effIdx >= 0) {
+          for (let i = effIdx; i < FISCAL_MONTHS.length; i++) {
+            const m = FISCAL_MONTHS[i];
+            const prevVal = parseNumericValue(nextCells[m]?.value);
+            nextCells[m] = {
+              mode: nextCells[m]?.mode === 'percent' ? 'percent' : 'fixed',
+              value: prevVal,
+              ...(nextCells[m]?.percentBase
+                ? { percentBase: nextCells[m].percentBase }
+                : {}),
+            };
+          }
+        }
+
+        return {
+          ...r,
+          description: 'New Basic',
+          type: 'income' as ItemType,
+          isBasic: true,
+          basicRole: 'new' as BasicRole,
+          effectiveFromMonth: effMonth,
+          removedFromMonth: undefined,
+          hidden: false,
+          cells: nextCells,
+        };
+      }
+
+      const isTargetOldBasic =
+        isOldReferenceBasicRow(r) ||
+        r.id === 'row-net-basic' ||
+        r.basicRole === 'normal' ||
+        r.description.trim().toLowerCase() === 'net basic';
+
+      if (!isTargetOldBasic) return r;
+
+      const currentDesc = r.description.trim();
+      const nextDesc = currentDesc.toLowerCase().includes('(old)')
+        ? currentDesc
+        : `${currentDesc} (old)`;
+
+      return {
+        ...r,
+        description: nextDesc,
+        isBasic: true,
+        basicRole: 'old' as BasicRole,
+        effectiveFromMonth: effMonth,
+        removedFromMonth: undefined,
+      };
+    });
+
+    if (existingNewBasic) {
+      await saveRowsForActiveSheet(fiscalStartYear, updatedExistingRows);
+      setNewBasicModalVisible(false);
+      return;
+    }
+
+    const newBasicRow: IncomeRow = {
+      id: `row-new-basic-${Date.now()}`,
+      description: 'New Basic',
+      type: 'income',
+      isBasic: true,
+      basicRole: 'new',
+      effectiveFromMonth: effMonth,
+      removedFromMonth: undefined,
+      hidden: false,
+      cells: buildDefaultCells('fixed', 0),
+    };
+
+    const insertIdx = updatedExistingRows.findIndex(
+      (r) =>
+        isOldReferenceBasicRow(r) ||
+        r.id === 'row-net-basic' ||
+        r.id === 'row-house-rent'
+    );
+
+    const nextRows = [...updatedExistingRows];
+    if (insertIdx >= 0) {
+      nextRows.splice(insertIdx, 0, newBasicRow);
+    } else {
+      nextRows.unshift(newBasicRow);
+    }
+
+    await saveRowsForActiveSheet(fiscalStartYear, nextRows);
+    setNewBasicModalVisible(false);
+  };
+
+  const handleConfirmRemoveNewBasicFromMonth = async () => {
+    if (!activeSheet || activeSheet.kind !== 'salary') return;
+
+    const removeIdx = FISCAL_MONTHS.indexOf(removeNewBasicFromMonth);
+    if (removeIdx < 0) return;
+
+    const newRowObj = rows.find((r) => !r.hidden && isNewBasicRow(r));
+    const effIdx = newRowObj
+      ? Math.max(0, FISCAL_MONTHS.indexOf(newRowObj.effectiveFromMonth || 'July'))
+      : 0;
+
+    if (removeIdx <= effIdx) {
+      const filteredRows = rows.filter((r) => !isNewBasicRow(r));
+      const restoredRows = filteredRows.map((r) => {
+        if (!isOldReferenceBasicRow(r)) return r;
+
+        const { effectiveFromMonth, removedFromMonth, ...rest } = r;
+        const cleanedDesc = r.description.replace(/\s*\(old\)/gi, '').trim();
+        return {
+          ...rest,
+          description: cleanedDesc || 'Net Basic',
+          isBasic: true,
+          basicRole: 'normal' as BasicRole,
+        };
+      });
+
+      await saveRowsForActiveSheet(fiscalStartYear, restoredRows);
+      setNewBasicModalVisible(false);
+      return;
+    }
+
+    const updatedRows = rows.map((r) => {
+      if (isNewBasicRow(r)) {
+        const nextCells = { ...r.cells };
+        for (let i = removeIdx; i < FISCAL_MONTHS.length; i++) {
+          nextCells[FISCAL_MONTHS[i]] = {
+            ...(nextCells[FISCAL_MONTHS[i]] || { mode: 'fixed' }),
+            value: 0,
+          };
+        }
+        return {
+          ...r,
+          removedFromMonth: removeNewBasicFromMonth,
+          cells: nextCells,
+        };
+      }
+
+      if (isOldReferenceBasicRow(r)) {
+        return {
+          ...r,
+          removedFromMonth: removeNewBasicFromMonth,
+        };
+      }
+
+      return r;
+    });
+
+    await saveRowsForActiveSheet(fiscalStartYear, updatedRows);
+    setNewBasicModalVisible(false);
+  };
 
   const handleJumpToStartOrCurrentMonth = () => {
     if (activeSheet?.kind === 'daily') {
       setDailySelectedMonth(getCurrentFiscalMonthName());
       return;
     }
-    snapToGridIndex(0, true);
+    snapToGridIndex(getCurrentFiscalMonthIndex(), true);
   };
 
   const scheduleGridSnapFromOffset = useCallback(
@@ -726,35 +1102,11 @@ export default function IncomeSheetScreen() {
     };
   }, []);
 
-  const getBasicForMonth = useCallback(
-    (month: string): number => {
-      const basicRow = rows.find(
-        (r) =>
-          r.isBasic || r.description.trim().toLowerCase() === 'net basic'
-      );
-      if (!basicRow || basicRow.hidden) return 0;
-      return parseNumericValue(basicRow.cells?.[month]?.value);
-    },
-    [rows]
-  );
-
   const getResolvedAmount = useCallback(
     (row: IncomeRow, month: string): number => {
-      if (row.hidden) return 0;
-      const cell = row.cells?.[month];
-      if (!cell) return 0;
-
-      const val = parseNumericValue(cell.value);
-      if (val === 0) return 0;
-
-      if (cell.mode === 'percent') {
-        const basic = getBasicForMonth(month);
-        const cents = Math.round(Math.round(basic * 100) * val) / 100;
-        return Math.round(cents) / 100;
-      }
-      return Math.round(val * 100) / 100;
+      return resolveRowAmountForMonth(rows, row, month);
     },
-    [getBasicForMonth]
+    [rows]
   );
 
   const { monthlySummary, yearlyTotals } = useMemo(() => {
@@ -775,7 +1127,7 @@ export default function IncomeSheetScreen() {
       let monthDeductionCents = 0;
 
       rows.forEach((row) => {
-        if (row.hidden) return;
+        if (!isRowCountedInTotalForMonth(rows, row, month)) return;
         const amount = getResolvedAmount(row, month);
         const amountCents = Math.round(amount * 100);
         if (row.type === 'income') {
@@ -863,19 +1215,8 @@ export default function IncomeSheetScreen() {
     setIncomeWizardVisible(false);
 
     setTimeout(() => {
-      snapToGridIndex(0, false);
+      snapToGridIndex(getCurrentFiscalMonthIndex(), false);
     }, 60);
-  };
-
-  const handleSelectSheet = async (sheetId: string) => {
-    await persistStore(fiscalStartYear, {
-      ...store,
-      initialized: true,
-      activeSheetId: sheetId,
-    });
-    setTimeout(() => {
-      snapToGridIndex(0, false);
-    }, 50);
   };
 
   const canConfirmStrictSheetDelete = useMemo(() => {
@@ -972,9 +1313,11 @@ export default function IncomeSheetScreen() {
 
   const openCellEditor = (row: IncomeRow, month: string) => {
     const currentCell = row.cells?.[month] || { mode: 'fixed', value: 0 };
+
     setEditingRow(row);
     setEditingMonth(month);
     setEditMode(row.isBasic || !isSalarySheet ? 'fixed' : currentCell.mode);
+    setEditPercentBase(currentCell.percentBase || 'old_basic');
     setEditValue(currentCell.value ? String(currentCell.value) : '');
     setApplyForward(Boolean(row.isBasic && isSalarySheet));
     setEditModalVisible(true);
@@ -986,6 +1329,10 @@ export default function IncomeSheetScreen() {
     const startIdx = FISCAL_MONTHS.indexOf(editingMonth);
     const effectiveMode: CellMode =
       editingRow.isBasic || !isSalarySheet ? 'fixed' : editMode;
+    const effectivePercentBase: PercentBase | undefined =
+      effectiveMode === 'percent' && isSalarySheet
+        ? editPercentBase
+        : undefined;
     const shouldApplyForward = isSalarySheet && applyForward;
 
     const updated = rows.map((row) => {
@@ -997,10 +1344,15 @@ export default function IncomeSheetScreen() {
           updatedCells[FISCAL_MONTHS[i]] = {
             mode: effectiveMode,
             value: numVal,
+            ...(effectivePercentBase ? { percentBase: effectivePercentBase } : {}),
           };
         }
       } else {
-        updatedCells[editingMonth] = { mode: effectiveMode, value: numVal };
+        updatedCells[editingMonth] = {
+          mode: effectiveMode,
+          value: numVal,
+          ...(effectivePercentBase ? { percentBase: effectivePercentBase } : {}),
+        };
       }
 
       return { ...row, cells: updatedCells };
@@ -1012,7 +1364,7 @@ export default function IncomeSheetScreen() {
       const nextFiscalStartYear = fiscalStartYear + 1;
       try {
         const nextRaw = await AsyncStorage.getItem(
-          getStorageKey(nextFiscalStartYear)
+          getIncomeStorageKey(nextFiscalStartYear)
         );
         const nextStore = parseYearStore(nextRaw);
         if (nextStore.sheets.length > 0) {
@@ -1021,16 +1373,27 @@ export default function IncomeSheetScreen() {
             return {
               ...s,
               rows: s.rows.map((r) => {
-                if (!r.isBasic && r.id !== editingRow.id) return r;
+                if (
+                  r.id !== editingRow.id &&
+                  (!editingRow.basicRole || r.basicRole !== editingRow.basicRole)
+                ) {
+                  return r;
+                }
                 const nextCells = { ...r.cells };
                 SECOND_HALF_MONTHS.forEach((m) => {
-                  nextCells[m] = { mode: 'fixed', value: numVal };
+                  nextCells[m] = {
+                    mode: effectiveMode,
+                    value: numVal,
+                    ...(effectivePercentBase
+                      ? { percentBase: effectivePercentBase }
+                      : {}),
+                  };
                 });
                 return { ...r, cells: nextCells };
               }),
             };
           });
-          await saveLocalData(getStorageKey(nextFiscalStartYear), {
+          await saveLocalData(getIncomeStorageKey(nextFiscalStartYear), {
             ...nextStore,
             sheets: syncedSheets,
           });
@@ -1058,12 +1421,17 @@ export default function IncomeSheetScreen() {
     const effectiveApplyAll = isSalarySheet && applyToAllMonths;
 
     FISCAL_MONTHS.forEach((m) => {
+      const cellBase =
+        effectiveMode === 'percent' && isSalarySheet
+          ? { percentBase: newPercentBase }
+          : {};
       if (effectiveApplyAll) {
-        cells[m] = { mode: effectiveMode, value: numVal };
+        cells[m] = { mode: effectiveMode, value: numVal, ...cellBase };
       } else {
         cells[m] = {
           mode: effectiveMode,
           value: m === selectedStartMonth ? numVal : 0,
+          ...cellBase,
         };
       }
     });
@@ -1164,7 +1532,9 @@ export default function IncomeSheetScreen() {
     const getRowAnnualTotal = (row: IncomeRow) => {
       const totalCents = FISCAL_MONTHS.reduce(
         (sumCents, m) =>
-          sumCents + Math.round(getResolvedAmount(row, m) * 100),
+          isRowCountedInTotalForMonth(rows, row, m)
+            ? sumCents + Math.round(getResolvedAmount(row, m) * 100)
+            : sumCents,
         0
       );
       return totalCents / 100;
@@ -1176,9 +1546,10 @@ export default function IncomeSheetScreen() {
           const annualSum = getRowAnnualTotal(row);
           const monthCols = FISCAL_MONTHS.map((m) => {
             const val = getResolvedAmount(row, m);
-            return `<td style="text-align:right;">${
-              val > 0 ? val.toLocaleString('en-IN') : '-'
-            }</td>`;
+            const excludedInMonth = !isRowCountedInTotalForMonth(rows, row, m);
+            return `<td style="text-align:right; ${
+              excludedInMonth ? 'color:#64748B; font-style:italic;' : ''
+            }">${val > 0 ? val.toLocaleString('en-IN') : '-'}</td>`;
           }).join('');
           return `
             <tr>
@@ -1368,11 +1739,22 @@ export default function IncomeSheetScreen() {
     }
   };
 
+  const getPercentBadgeText = (cellVal: number, base?: PercentBase) => {
+    if (!hasNewBasic && !base) return `${cellVal}% of Basic`;
+    return base === 'new_basic'
+      ? `${cellVal}% of New Basic`
+      : `${cellVal}% of Old Basic`;
+  };
+
   const renderMonthCells = (row: IncomeRow) => {
+    const isOldRef = isOldReferenceBasicRow(row);
+    const isNewB = isNewBasicRow(row);
+
     return FISCAL_MONTHS.map((month) => {
       const cell = row.cells?.[month] || { mode: 'fixed', value: 0 };
       const cellVal = parseNumericValue(cell.value);
       const resolvedVal = getResolvedAmount(row, month);
+      const countedInMonth = isRowCountedInTotalForMonth(rows, row, month);
 
       return (
         <TouchableOpacity
@@ -1382,8 +1764,11 @@ export default function IncomeSheetScreen() {
           style={[
             styles.cell,
             { width: monthColWidth },
-            row.isBasic && styles.basicCellBg,
-            !row.isBasic &&
+            isOldRef && !countedInMonth && styles.oldBasicCellBg,
+            (isNewB || (!isOldRef && row.isBasic)) &&
+              countedInMonth &&
+              styles.basicCellBg,
+            !isOldRef &&
               cell.mode === 'percent' &&
               cellVal > 0 &&
               styles.percentCellBg,
@@ -1393,12 +1778,22 @@ export default function IncomeSheetScreen() {
             style={[
               styles.resolvedAmountText,
               row.isBasic && { fontWeight: '700', color: '#0F172A' },
+              isOldRef && !countedInMonth && { color: '#64748B' },
+              isNewB && !countedInMonth && { color: '#94A3B8' },
             ]}
           >
             {resolvedVal > 0 ? resolvedVal.toLocaleString('en-IN') : '0'}
           </Text>
-          {!row.isBasic && cell.mode === 'percent' && cellVal > 0 && (
-            <Text style={styles.percentBadge}>{cellVal}% of Basic</Text>
+          {cell.mode === 'percent' && cellVal > 0 && (
+            <Text style={styles.percentBadge}>
+              {getPercentBadgeText(cellVal, cell.percentBase)}
+            </Text>
+          )}
+          {isOldRef && !countedInMonth && (
+            <Text style={styles.oldBasicBadge}>Ref Only</Text>
+          )}
+          {isNewB && !countedInMonth && (
+            <Text style={styles.oldBasicBadge}>Inactive</Text>
           )}
         </TouchableOpacity>
       );
@@ -1422,7 +1817,7 @@ export default function IncomeSheetScreen() {
               ? activeSheet.kind === 'daily'
                 ? 'দৈনিক আয় ও হিসাব'
                 : 'July – June অর্থবছর শিট'
-              : 'নতুন Income শিট যোগ করুন'}
+              : 'Main Setting থেকে শিট নির্বাচন করুন'}
           </Text>
         </View>
 
@@ -1432,9 +1827,7 @@ export default function IncomeSheetScreen() {
               style={styles.nowBtn}
               onPress={handleJumpToStartOrCurrentMonth}
             >
-              <Text style={styles.nowBtnText}>
-                {activeSheet.kind === 'daily' ? 'Now' : 'July'}
-              </Text>
+              <Text style={styles.nowBtnText}>Now</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1463,114 +1856,35 @@ export default function IncomeSheetScreen() {
             <Ionicons name="chevron-forward" size={18} color="#2563EB" />
           </TouchableOpacity>
         </View>
+
+        {activeSheet && activeSheet.kind !== 'daily' && (
+          <TouchableOpacity
+            style={styles.moreMenuBtn}
+            onPress={() => setSettingsMenuVisible(true)}
+            accessibilityLabel="Sheet Options"
+          >
+            <Ionicons name="ellipsis-vertical" size={19} color="#1E293B" />
+          </TouchableOpacity>
+        )}
       </View>
 
-      {store.sheets.length > 0 && (
-        <View style={styles.sheetSwitcherBar}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 6, alignItems: 'center' }}
-            style={{ flex: 1 }}
-          >
-            {store.sheets.map((s) => {
-              const selected = activeSheet?.id === s.id;
-              return (
-                <TouchableOpacity
-                  key={s.id}
-                  style={[
-                    styles.sheetTabChip,
-                    selected && styles.sheetTabChipActive,
-                  ]}
-                  onPress={() => void handleSelectSheet(s.id)}
-                >
-                  <Text
-                    style={[
-                      styles.sheetTabText,
-                      selected && styles.sheetTabTextActive,
-                    ]}
-                  >
-                    {s.title}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-
-            {!isSettingsManageMode && (
-              <TouchableOpacity
-                style={styles.newSheetMiniBtn}
-                onPress={openIncomeSetupWizard}
-              >
-                <Ionicons name="add" size={15} color="#1D4ED8" />
-                <Text style={styles.newSheetMiniText}>Add Income</Text>
-              </TouchableOpacity>
-            )}
-          </ScrollView>
-
-          {isSettingsManageMode && activeSheet && (
-            <TouchableOpacity
-              style={styles.deleteSheetIconBtn}
-              onPress={() => {
-                setDeleteSheetTarget(activeSheet);
-                setDeleteSheetChecked(false);
-                setDeleteSheetTypedText('');
-              }}
-              accessibilityLabel="Delete Active Sheet"
-            >
-              <Ionicons name="trash-outline" size={16} color="#DC2626" />
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-
       {activeSheet && activeSheet.kind !== 'daily' && (
-        <View style={styles.actionBar}>
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: '#16A34A' }]}
-            onPress={() => {
-              setNewType('income');
-              setNewMode('fixed');
-              setApplyToAllMonths(false);
-              setAddModalVisible(true);
-            }}
-          >
-            <Ionicons name="add-circle-outline" size={16} color="#FFF" />
-            <Text style={styles.addBtnText}>+ Income</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: '#DC2626' }]}
-            onPress={() => {
-              setNewType('deduction');
-              setNewMode('fixed');
-              setApplyToAllMonths(false);
-              setAddModalVisible(true);
-            }}
-          >
-            <Ionicons name="remove-circle-outline" size={16} color="#FFF" />
-            <Text style={styles.addBtnText}>+ Deduction</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.addBtn, { backgroundColor: '#334155' }]}
-            onPress={() => setHiddenModalVisible(true)}
-          >
-            <Ionicons name="eye-off-outline" size={16} color="#FFF" />
-            <Text style={styles.addBtnText}>Hidden ({hiddenRows.length})</Text>
-          </TouchableOpacity>
-
+        <View style={styles.monthStepBar}>
+          <Text style={styles.monthStepLabel}>
+            অর্থবছর: {fiscalLabel} • মাস স্ক্রল করুন
+          </Text>
           <View style={styles.gridStepGroup}>
             <TouchableOpacity
               style={styles.gridStepBtn}
               onPress={() => snapToGridIndex(activeGridIndex - 1, true)}
             >
-              <Ionicons name="chevron-back" size={16} color="#1E3A8A" />
+              <Ionicons name="chevron-back" size={15} color="#1E3A8A" />
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.gridStepBtn}
               onPress={() => snapToGridIndex(activeGridIndex + 1, true)}
             >
-              <Ionicons name="chevron-forward" size={16} color="#1E3A8A" />
+              <Ionicons name="chevron-forward" size={15} color="#1E3A8A" />
             </TouchableOpacity>
           </View>
         </View>
@@ -1578,21 +1892,22 @@ export default function IncomeSheetScreen() {
 
       {!activeSheet ? (
         <View style={styles.emptyStateContainer}>
-          {!isSettingsManageMode ? (
-            <TouchableOpacity
-              style={styles.primaryAddIncomeBtn}
-              onPress={openIncomeSetupWizard}
-            >
-              <Ionicons name="add" size={22} color="#FFFFFF" />
-              <Text style={styles.primaryAddIncomeText}>Add Income</Text>
-            </TouchableOpacity>
-          ) : (
-            <View style={styles.noIncomeSheetHint}>
-              <Text style={styles.noIncomeSheetText}>
-                No income sheets to delete. Add a sheet from the Income page.
-              </Text>
-            </View>
-          )}
+          <View style={styles.noIncomeSheetHint}>
+            <Text style={styles.noIncomeSheetText}>
+              {isSettingsManageMode
+                ? 'No income sheets available to delete.'
+                : 'কোনো Income শিট সক্রিয় নেই। Main Setting (Total Setting) থেকে Income শিট তৈরি বা নির্বাচন করুন।'}
+            </Text>
+            {!isSettingsManageMode && (
+              <TouchableOpacity
+                style={styles.primaryAddIncomeBtn}
+                onPress={openIncomeSetupWizard}
+              >
+                <Ionicons name="add" size={20} color="#FFFFFF" />
+                <Text style={styles.primaryAddIncomeText}>Create Sheet</Text>
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
       ) : activeSheet.kind === 'daily' ? (
         <ScrollView contentContainerStyle={styles.dailyContainer}>
@@ -1744,31 +2059,64 @@ export default function IncomeSheetScreen() {
                 <Text style={styles.sectionBannerText}>INCOME (+)</Text>
               </View>
 
-              {visibleIncomeRows.map((row) => (
-                <View
-                  key={row.id}
-                  style={[styles.descCell, { width: descColWidth }]}
-                >
-                  <View style={{ flex: 1, marginRight: 3 }}>
-                    <Text style={styles.descText} numberOfLines={2}>
-                      {row.description}
-                    </Text>
-                    {row.isBasic && (
-                      <Text style={styles.hintSubText}>Jul→Jun | Jan→Jun</Text>
-                    )}
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => void handleToggleHideRow(row.id, true)}
-                    accessibilityLabel="Hide item"
+              {visibleIncomeRows.map((row) => {
+                const isOldRef = isOldReferenceBasicRow(row);
+                const isNewB = isNewBasicRow(row);
+                return (
+                  <View
+                    key={row.id}
+                    style={[styles.descCell, { width: descColWidth }]}
                   >
-                    <Ionicons
-                      name="eye-off-outline"
-                      size={15}
-                      color="#64748B"
-                    />
-                  </TouchableOpacity>
-                </View>
-              ))}
+                    <View style={{ flex: 1, marginRight: 3 }}>
+                      <Text style={styles.descText} numberOfLines={2}>
+                        {row.description}
+                      </Text>
+                      {isOldRef && (
+                        <Text style={styles.hintSubText}>
+                          {hasNewBasic
+                            ? row.removedFromMonth
+                              ? `${row.effectiveFromMonth || 'Jan'}–${
+                                  FISCAL_MONTHS[
+                                    Math.max(
+                                      0,
+                                      FISCAL_MONTHS.indexOf(
+                                        row.removedFromMonth
+                                      ) - 1
+                                    )
+                                  ]
+                                } Ref Only`
+                              : `${row.effectiveFromMonth || 'Jan'} থেকে Ref Only`
+                            : 'ভাতার বেস'}
+                        </Text>
+                      )}
+                      {isNewB && (
+                        <Text style={styles.hintSubText}>
+                          {row.removedFromMonth
+                            ? `${row.effectiveFromMonth || 'Jul'} → ${
+                                row.removedFromMonth
+                              } থেকে বাদ`
+                            : row.effectiveFromMonth
+                              ? `${row.effectiveFromMonth} থেকে Total-এ`
+                              : 'Total-এ গণনা হবে'}
+                        </Text>
+                      )}
+                      {!isOldRef && !isNewB && row.isBasic && (
+                        <Text style={styles.hintSubText}>Jul→Jun | Jan→Jun</Text>
+                      )}
+                    </View>
+                    <TouchableOpacity
+                      onPress={() => void handleToggleHideRow(row.id, true)}
+                      accessibilityLabel="Hide item"
+                    >
+                      <Ionicons
+                        name="eye-off-outline"
+                        size={15}
+                        color="#64748B"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
 
               <View
                 style={[
@@ -1968,6 +2316,260 @@ export default function IncomeSheetScreen() {
         </ScrollView>
       )}
 
+      {/* 3-Dot Sheet Settings Menu Modal */}
+      <Modal
+        visible={settingsMenuVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setSettingsMenuVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.menuBackdrop}
+          activeOpacity={1}
+          onPress={() => setSettingsMenuVisible(false)}
+        >
+          <View style={styles.menuCard}>
+            <Text style={styles.menuHeaderTitle}>শিট সেটিংস ও অপশন</Text>
+
+            <TouchableOpacity
+              style={styles.menuOptionRow}
+              onPress={() => {
+                setSettingsMenuVisible(false);
+                setNewType('income');
+                setNewMode('fixed');
+                setNewPercentBase('old_basic');
+                setApplyToAllMonths(false);
+                setAddModalVisible(true);
+              }}
+            >
+              <View style={[styles.menuIconBox, { backgroundColor: '#DCFCE7' }]}>
+                <Ionicons name="add-circle-outline" size={18} color="#16A34A" />
+              </View>
+              <Text style={styles.menuOptionText}>+ Add Income</Text>
+            </TouchableOpacity>
+
+            {isSalarySheet && (
+              <TouchableOpacity
+                style={styles.menuOptionRow}
+                onPress={openAddNewBasicModal}
+              >
+                <View
+                  style={[styles.menuIconBox, { backgroundColor: '#F3E8FF' }]}
+                >
+                  <Ionicons name="layers-outline" size={18} color="#7C3AED" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.menuOptionText}>
+                    {hasNewBasic ? 'Update / Re-enable New Basic' : '+ Add New Basic'}
+                  </Text>
+                  <Text style={styles.menuOptionSub}>
+                    শুরুর মাস নির্বাচন করে New Basic চালু বা আপডেট করুন
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
+            {isSalarySheet && hasNewBasic && (
+              <TouchableOpacity
+                style={styles.menuOptionRow}
+                onPress={openRemoveNewBasicModal}
+              >
+                <View
+                  style={[styles.menuIconBox, { backgroundColor: '#FEE2E2' }]}
+                >
+                  <Ionicons
+                    name="remove-circle-outline"
+                    size={18}
+                    color="#DC2626"
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.menuOptionText, { color: '#DC2626' }]}>
+                    Remove New Basic From Month
+                  </Text>
+                  <Text style={styles.menuOptionSub}>
+                    নির্দিষ্ট মাস থেকে New Basic বাদ দিন
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+
+            <TouchableOpacity
+              style={styles.menuOptionRow}
+              onPress={() => {
+                setSettingsMenuVisible(false);
+                setNewType('deduction');
+                setNewMode('fixed');
+                setNewPercentBase('old_basic');
+                setApplyToAllMonths(false);
+                setAddModalVisible(true);
+              }}
+            >
+              <View style={[styles.menuIconBox, { backgroundColor: '#FEE2E2' }]}>
+                <Ionicons
+                  name="remove-circle-outline"
+                  size={18}
+                  color="#DC2626"
+                />
+              </View>
+              <Text style={styles.menuOptionText}>+ Add Deduction</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.menuOptionRow, { borderBottomWidth: 0 }]}
+              onPress={() => {
+                setSettingsMenuVisible(false);
+                setHiddenModalVisible(true);
+              }}
+            >
+              <View style={[styles.menuIconBox, { backgroundColor: '#E2E8F0' }]}>
+                <Ionicons name="eye-off-outline" size={18} color="#334155" />
+              </View>
+              <Text style={styles.menuOptionText}>
+                Hidden Items ({hiddenRows.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* Add / Remove New Basic Month Modal */}
+      <Modal
+        visible={newBasicModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setNewBasicModalVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            {newBasicModalMode === 'remove' ? (
+              <>
+                <Text style={[styles.modalTitle, { color: '#B91C1C' }]}>
+                  কোন মাস থেকে New Basic রিমুভ করবেন? ({fiscalLabel})
+                </Text>
+
+                <Text style={styles.menuOptionSub}>
+                  যে মাস নির্বাচন করবেন, সেই মাস ও পরবর্তী মাসগুলো থেকে New Basic
+                  বাদ যাবে এবং Old Basic আবার স্বাভাবিক Total-এ গণনা হবে।
+                </Text>
+
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={{ marginVertical: 12 }}
+                >
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    {FISCAL_MONTHS.map((m) => (
+                      <TouchableOpacity
+                        key={m}
+                        onPress={() => setRemoveNewBasicFromMonth(m)}
+                        style={[
+                          styles.monthChip,
+                          removeNewBasicFromMonth === m &&
+                            styles.monthChipActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.monthChipText,
+                            removeNewBasicFromMonth === m &&
+                              styles.monthChipTextActive,
+                          ]}
+                        >
+                          {m.slice(0, 3)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                    onPress={() => setNewBasicModalVisible(false)}
+                  >
+                    <Text style={{ color: '#334155', fontWeight: '600' }}>
+                      বাতিল
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: '#DC2626' }]}
+                    onPress={() => void handleConfirmRemoveNewBasicFromMonth()}
+                  >
+                    <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                      রিমুভ করুন
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              <>
+                <Text style={styles.modalTitle}>
+                  New Basic যুক্ত / আপডেট করুন ({fiscalLabel})
+                </Text>
+
+                <Text style={styles.inputLabel}>
+                  কোন মাস থেকে New Basic কার্যকর হবে?
+                </Text>
+                <Text style={styles.menuOptionSub}>
+                  আগে রিমুভ করা থাকলে এখান থেকে নতুন মাস বেছে নিয়ে আবার সক্রিয়
+                  করতে পারবেন—কোনো ডুপ্লিকেট রো তৈরি হবে না।
+                </Text>
+
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  style={{ marginVertical: 12 }}
+                >
+                  <View style={{ flexDirection: 'row', gap: 6 }}>
+                    {FISCAL_MONTHS.map((m) => (
+                      <TouchableOpacity
+                        key={m}
+                        onPress={() => setNewBasicEffectiveMonth(m)}
+                        style={[
+                          styles.monthChip,
+                          newBasicEffectiveMonth === m && styles.monthChipActive,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.monthChipText,
+                            newBasicEffectiveMonth === m &&
+                              styles.monthChipTextActive,
+                          ]}
+                        >
+                          {m.slice(0, 3)}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </ScrollView>
+
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                    onPress={() => setNewBasicModalVisible(false)}
+                  >
+                    <Text style={{ color: '#334155', fontWeight: '600' }}>
+                      বাতিল
+                    </Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.modalBtn, { backgroundColor: '#7C3AED' }]}
+                    onPress={() => void handleConfirmAddNewBasicRow()}
+                  >
+                    <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                      যুক্ত করুন
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
+          </View>
+        </View>
+      </Modal>
+
+      {/* Income Setup Wizard Modal */}
       <Modal visible={incomeWizardVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -1997,8 +2599,8 @@ export default function IncomeSheetScreen() {
                     চাকরি / বেতনভুক্ত (Salary & Allowances)
                   </Text>
                   <Text style={styles.kindSub}>
-                    Net Basic, House Rent (%), Medical, Arrear, Previous Paid
-                    Allowance সহ পূর্ণাঙ্গ শিট
+                    Net Basic, House Rent (Old/New Basic %), Medical, Arrear
+                    সহ পূর্ণাঙ্গ শিট
                   </Text>
                 </TouchableOpacity>
 
@@ -2185,6 +2787,7 @@ export default function IncomeSheetScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Strict Delete Modal */}
       <Modal visible={Boolean(deleteSheetTarget)} transparent animationType="fade">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2279,6 +2882,7 @@ export default function IncomeSheetScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* Cell Edit Modal */}
       <Modal visible={editModalVisible} transparent animationType="fade">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2326,6 +2930,50 @@ export default function IncomeSheetScreen() {
                     </Text>
                   </TouchableOpacity>
                 </View>
+
+                {editMode === 'percent' && (
+                  <>
+                    <Text style={styles.inputLabel}>
+                      কোন Basic-এর ওপর (%) হিসাব হবে?
+                    </Text>
+                    <View style={styles.modeRow}>
+                      <TouchableOpacity
+                        style={[
+                          styles.modeBtn,
+                          editPercentBase === 'old_basic' && styles.modeBtnActive,
+                        ]}
+                        onPress={() => setEditPercentBase('old_basic')}
+                      >
+                        <Text
+                          style={[
+                            styles.modeBtnText,
+                            editPercentBase === 'old_basic' &&
+                              styles.modeBtnTextActive,
+                          ]}
+                        >
+                          Old Basic
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.modeBtn,
+                          editPercentBase === 'new_basic' && styles.modeBtnActive,
+                        ]}
+                        onPress={() => setEditPercentBase('new_basic')}
+                      >
+                        <Text
+                          style={[
+                            styles.modeBtnText,
+                            editPercentBase === 'new_basic' &&
+                              styles.modeBtnTextActive,
+                          ]}
+                        >
+                          New Basic
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
               </>
             )}
 
@@ -2386,6 +3034,7 @@ export default function IncomeSheetScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
+      {/* PDF Action Modal */}
       <Modal visible={pdfActionModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -2449,6 +3098,7 @@ export default function IncomeSheetScreen() {
         </View>
       </Modal>
 
+      {/* Hidden Items Modal */}
       <Modal visible={hiddenModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
@@ -2496,6 +3146,7 @@ export default function IncomeSheetScreen() {
         </View>
       </Modal>
 
+      {/* Add Row Modal */}
       <Modal visible={addModalVisible} transparent animationType="slide">
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -2553,6 +3204,50 @@ export default function IncomeSheetScreen() {
                     </Text>
                   </TouchableOpacity>
                 </View>
+
+                {newMode === 'percent' && (
+                  <>
+                    <Text style={styles.inputLabel}>
+                      কোন Basic-এর ওপর (%) হিসাব হবে?
+                    </Text>
+                    <View style={styles.modeRow}>
+                      <TouchableOpacity
+                        style={[
+                          styles.modeBtn,
+                          newPercentBase === 'old_basic' && styles.modeBtnActive,
+                        ]}
+                        onPress={() => setNewPercentBase('old_basic')}
+                      >
+                        <Text
+                          style={[
+                            styles.modeBtnText,
+                            newPercentBase === 'old_basic' &&
+                              styles.modeBtnTextActive,
+                          ]}
+                        >
+                          Old Basic
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[
+                          styles.modeBtn,
+                          newPercentBase === 'new_basic' && styles.modeBtnActive,
+                        ]}
+                        onPress={() => setNewPercentBase('new_basic')}
+                      >
+                        <Text
+                          style={[
+                            styles.modeBtnText,
+                            newPercentBase === 'new_basic' &&
+                              styles.modeBtnTextActive,
+                          ]}
+                        >
+                          New Basic
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
               </>
             )}
 
@@ -2714,73 +3409,88 @@ const styles = StyleSheet.create({
     color: '#1E40AF',
     fontSize: 12,
   },
-  sheetSwitcherBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    gap: 6,
-  },
-  sheetTabChip: {
-    paddingHorizontal: 11,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-  },
-  sheetTabChipActive: {
-    backgroundColor: '#1E3A8A',
-    borderColor: '#1E3A8A',
-  },
-  sheetTabText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#334155',
-  },
-  sheetTabTextActive: {
-    color: '#FFFFFF',
-  },
-  newSheetMiniBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: '#EFF6FF',
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-  },
-  newSheetMiniText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: '#1D4ED8',
-  },
-  deleteSheetIconBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: '#FEF2F2',
-    borderWidth: 1,
-    borderColor: '#FECACA',
+  moreMenuBtn: {
+    paddingHorizontal: 5,
+    paddingVertical: 5,
+    borderRadius: 7,
+    backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  actionBar: {
+  monthStepBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 8,
-    gap: 6,
-    backgroundColor: '#FFFFFF',
+    justifyContent: 'space-between',
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
   },
-  addBtn: {
+  monthStepLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  menuBackdrop: {
     flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.35)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingTop: Platform.OS === 'android' ? 76 : 56,
+    paddingRight: 12,
+  },
+  menuCard: {
+    width: 265,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.16,
+    shadowRadius: 12,
+    elevation: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  menuHeaderTitle: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#64748B',
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    marginBottom: 2,
+  },
+  menuOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 9,
+    paddingHorizontal: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F8FAFC',
+  },
+  menuIconBox: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuOptionText: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: '#0F172A',
+  },
+  menuOptionSub: {
+    fontSize: 10.5,
+    color: '#64748B',
+    marginTop: 1,
+  },
+  addBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -2791,15 +3501,15 @@ const styles = StyleSheet.create({
   addBtnText: {
     color: '#FFFFFF',
     fontWeight: '600',
-    fontSize: 11.5,
+    fontSize: 12,
   },
   gridStepGroup: {
     flexDirection: 'row',
     gap: 4,
   },
   gridStepBtn: {
-    width: 30,
-    height: 32,
+    width: 28,
+    height: 28,
     borderRadius: 7,
     backgroundColor: '#DBEAFE',
     alignItems: 'center',
@@ -2816,13 +3526,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
     backgroundColor: '#2563EB',
-    paddingHorizontal: 24,
-    paddingVertical: 13,
-    borderRadius: 11,
+    paddingHorizontal: 20,
+    paddingVertical: 11,
+    borderRadius: 10,
   },
   primaryAddIncomeText: {
     color: '#FFFFFF',
-    fontSize: 15.5,
+    fontSize: 14,
     fontWeight: '700',
   },
   noIncomeSheetHint: {
@@ -2968,6 +3678,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 4,
     backgroundColor: '#FFFFFF',
   },
+  oldBasicCellBg: {
+    backgroundColor: '#F1F5F9',
+  },
   basicCellBg: {
     backgroundColor: '#FEFCE8',
   },
@@ -2982,9 +3695,16 @@ const styles = StyleSheet.create({
   },
   percentBadge: {
     textAlign: 'right',
-    fontSize: 9,
+    fontSize: 8.5,
     color: '#15803D',
     fontWeight: '600',
+    marginTop: 1,
+  },
+  oldBasicBadge: {
+    textAlign: 'right',
+    fontSize: 8.5,
+    color: '#64748B',
+    fontStyle: 'italic',
     marginTop: 1,
   },
   summaryCell: {

@@ -6,6 +6,7 @@ import { onAuthStateChanged, signOut, User } from 'firebase/auth';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  DeviceEventEmitter,
   Image,
   Modal,
   Platform,
@@ -17,12 +18,14 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { auth } from '../firebase';
+import { saveLocalData, stopFirebaseSync } from '../utils/firebaseSync';
 import {
   AuthSessionState,
+  exitGuestSession,
   getAuthSession,
 } from '../utils/guestAuthSync';
 
-type AppLanguage = 'en' | 'bn';
+export type AppLanguage = 'en' | 'bn';
 
 export interface DashboardModuleItem {
   id: string;
@@ -34,7 +37,8 @@ export interface DashboardModuleItem {
   defaultEnabled: boolean;
 }
 
-const LANGUAGE_STORAGE_KEY = '@mybudget_app_language_v1';
+export const LANGUAGE_STORAGE_KEY = '@mybudget_app_language_v1';
+export const LANGUAGE_CHANGED_EVENT = 'mybudget_language_changed_v1';
 const SESSION_STORAGE_KEY = '@mybudget_auth_session_v1';
 export const DASHBOARD_ENABLED_MODULES_KEY = '@mybudget_dashboard_modules_v1';
 
@@ -131,6 +135,7 @@ export default function HomeScreen() {
   const [authUser, setAuthUser] = useState<User | null>(auth.currentUser);
   const [drawerVisible, setDrawerVisible] = useState<boolean>(false);
   const [loggingOut, setLoggingOut] = useState<boolean>(false);
+  const [switchingLang, setSwitchingLang] = useState<boolean>(false);
   const [imageError, setImageError] = useState<boolean>(false);
 
   useEffect(() => {
@@ -138,6 +143,18 @@ export default function HomeScreen() {
       setAuthUser(user);
     });
     return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const subscription = DeviceEventEmitter.addListener(
+      LANGUAGE_CHANGED_EVENT,
+      (nextLang: AppLanguage) => {
+        if (nextLang === 'en' || nextLang === 'bn') {
+          setLang(nextLang);
+        }
+      }
+    );
+    return () => subscription.remove();
   }, []);
 
   const loadDashboardPrefs = useCallback(async () => {
@@ -168,14 +185,32 @@ export default function HomeScreen() {
   }, []);
 
   useEffect(() => {
-    loadDashboardPrefs();
+    void loadDashboardPrefs();
   }, [loadDashboardPrefs]);
 
   useFocusEffect(
     useCallback(() => {
-      loadDashboardPrefs();
+      void loadDashboardPrefs();
     }, [loadDashboardPrefs])
   );
+
+  const handleToggleLanguage = async (targetLang?: AppLanguage) => {
+    if (switchingLang) return;
+    const nextLang: AppLanguage =
+      targetLang || (lang === 'bn' ? 'en' : 'bn');
+    if (nextLang === lang) return;
+
+    setSwitchingLang(true);
+    setLang(nextLang);
+    try {
+      await saveLocalData(LANGUAGE_STORAGE_KEY, nextLang);
+      DeviceEventEmitter.emit(LANGUAGE_CHANGED_EVENT, nextLang);
+    } catch (error) {
+      console.error('Failed to switch language:', error);
+    } finally {
+      setSwitchingLang(false);
+    }
+  };
 
   const visibleMenuItems = useMemo(() => {
     const idSet = new Set(enabledModuleIds);
@@ -193,6 +228,13 @@ export default function HomeScreen() {
     try {
       setLoggingOut(true);
       setDrawerVisible(false);
+      stopFirebaseSync();
+
+      if (isGuestMode) {
+        await exitGuestSession();
+        router.replace('/login');
+        return;
+      }
 
       if (Platform.OS !== 'web') {
         try {
@@ -232,7 +274,7 @@ export default function HomeScreen() {
 
     if (Platform.OS === 'web') {
       if (window.confirm(confirmMsg)) {
-        performLogout();
+        void performLogout();
       }
     } else {
       Alert.alert(isGuestMode ? 'Exit Guest' : 'Logout', confirmMsg, [
@@ -240,7 +282,7 @@ export default function HomeScreen() {
         {
           text: isGuestMode ? 'Exit' : 'Logout',
           style: 'destructive',
-          onPress: performLogout,
+          onPress: () => void performLogout(),
         },
       ]);
     }
@@ -290,14 +332,23 @@ export default function HomeScreen() {
             {lang === 'bn' ? 'আমার বাজেট' : 'My Budget'}
           </Text>
           <Text style={styles.brandSubtitle}>
-            {isGuestMode ? 'Guest Mode • Local Sync' : 'Personal Finance Dashboard'}
+            {isGuestMode
+              ? lang === 'bn'
+                ? 'Guest মোড • লোকাল সিঙ্ক'
+                : 'Guest Mode • Local Sync'
+              : lang === 'bn'
+                ? 'পার্সোনাল ফিন্যান্স ড্যাশবোর্ড'
+                : 'Personal Finance Dashboard'}
           </Text>
         </View>
 
         <View style={{ width: 40 }} />
       </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        showsVerticalScrollIndicator={false}
+      >
         {isGuestMode && (
           <View style={styles.guestBannerCard}>
             <View style={{ flex: 1 }}>
@@ -308,8 +359,8 @@ export default function HomeScreen() {
               </Text>
               <Text style={styles.guestBannerDesc}>
                 {lang === 'bn'
-                  ? 'সব ডেটা লোকাল স্টোরেজে সেভ হচ্ছে। রেজিস্ট্রেশন করলে আপনার লোকাল ডেটা সিঙ্ক হয়ে যাবে।'
-                  : 'All data is saved locally. Register anytime to keep your local data synced.'}
+                  ? 'সব ডেটা লোকাল স্টোরেজে সেভ হচ্ছে। রেজিস্ট্রেশন করলে আপনার লোকাল ডেটা নতুন অ্যাকাউন্টে ট্রান্সফার হবে।'
+                  : 'All data is saved locally. Register anytime to transfer your local data to a new account.'}
               </Text>
             </View>
             <TouchableOpacity
@@ -327,7 +378,9 @@ export default function HomeScreen() {
           <View style={styles.heroBadge}>
             <Ionicons name="sparkles" size={13} color="#1D4ED8" />
             <Text style={styles.heroBadgeText}>
-              {lang === 'bn' ? 'স্মার্ট ফিন্যান্স ওয়ার্কস্পেস' : 'Smart Finance Workspace'}
+              {lang === 'bn'
+                ? 'স্মার্ট ফিন্যান্স ওয়ার্কস্পেস'
+                : 'Smart Finance Workspace'}
             </Text>
           </View>
           <Text style={styles.heroHeading}>
@@ -362,7 +415,12 @@ export default function HomeScreen() {
                   activeOpacity={0.78}
                   onPress={() => router.push(item.route as never)}
                 >
-                  <View style={[styles.cardTopAccent, { backgroundColor: item.color }]} />
+                  <View
+                    style={[
+                      styles.cardTopAccent,
+                      { backgroundColor: item.color },
+                    ]}
+                  />
 
                   <View
                     style={[
@@ -381,7 +439,11 @@ export default function HomeScreen() {
                     <Text style={[styles.openText, { color: item.color }]}>
                       {lang === 'bn' ? 'খুলুন' : 'Open'}
                     </Text>
-                    <Ionicons name="chevron-forward" size={15} color={item.color} />
+                    <Ionicons
+                      name="chevron-forward"
+                      size={15}
+                      color={item.color}
+                    />
                   </View>
                 </TouchableOpacity>
               );
@@ -402,15 +464,58 @@ export default function HomeScreen() {
               contentContainerStyle={styles.drawerScrollContent}
               showsVerticalScrollIndicator={false}
             >
+              {/* ড্রয়ারের একদম ওপরে ব্র্যান্ড + ছোট Language Toggle + Close */}
               <View style={styles.drawerTopHeader}>
                 <Text style={styles.drawerBrandLabel}>My Budget</Text>
-                <TouchableOpacity
-                  style={styles.drawerCloseBtn}
-                  onPress={() => setDrawerVisible(false)}
-                  accessibilityLabel="Close Drawer"
-                >
-                  <Ionicons name="close" size={22} color="#334155" />
-                </TouchableOpacity>
+
+                <View style={styles.drawerTopRightRow}>
+                  <View style={styles.miniLangSwitch}>
+                    <TouchableOpacity
+                      style={[
+                        styles.miniLangBtn,
+                        lang === 'bn' && styles.miniLangBtnActive,
+                      ]}
+                      onPress={() => void handleToggleLanguage('bn')}
+                      disabled={switchingLang}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.miniLangText,
+                          lang === 'bn' && styles.miniLangTextActive,
+                        ]}
+                      >
+                        বাং
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.miniLangBtn,
+                        lang === 'en' && styles.miniLangBtnActive,
+                      ]}
+                      onPress={() => void handleToggleLanguage('en')}
+                      disabled={switchingLang}
+                      activeOpacity={0.8}
+                    >
+                      <Text
+                        style={[
+                          styles.miniLangText,
+                          lang === 'en' && styles.miniLangTextActive,
+                        ]}
+                      >
+                        EN
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  <TouchableOpacity
+                    style={styles.drawerCloseBtn}
+                    onPress={() => setDrawerVisible(false)}
+                    accessibilityLabel="Close Drawer"
+                  >
+                    <Ionicons name="close" size={20} color="#334155" />
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <View style={styles.userProfileCard}>
@@ -434,20 +539,31 @@ export default function HomeScreen() {
               </View>
 
               {isGuestMode && (
-                <TouchableOpacity
-                  style={styles.drawerRegisterBtn}
-                  onPress={() => {
-                    setDrawerVisible(false);
-                    router.push('/register' as never);
-                  }}
-                >
-                  <Ionicons name="person-add-outline" size={18} color="#FFFFFF" />
-                  <Text style={styles.drawerRegisterText}>
+                <View style={styles.drawerGuestSuggestBox}>
+                  <Text style={styles.drawerGuestSuggestTitle}>
                     {lang === 'bn'
-                      ? 'অ্যাকাউন্ট রেজিস্টার ও ডেটা সিঙ্ক করুন'
-                      : 'Register Account & Sync Data'}
+                      ? 'Guest ডেটা সুরক্ষিত রাখতে রেজিস্টার করুন'
+                      : 'Register to Sync & Keep Guest Data'}
                   </Text>
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.drawerRegisterBtn}
+                    onPress={() => {
+                      setDrawerVisible(false);
+                      router.push('/register' as never);
+                    }}
+                  >
+                    <Ionicons
+                      name="person-add-outline"
+                      size={17}
+                      color="#FFFFFF"
+                    />
+                    <Text style={styles.drawerRegisterText}>
+                      {lang === 'bn'
+                        ? 'রেজিস্টার ও ডেটা ট্রান্সফার'
+                        : 'Register & Transfer Data'}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
               )}
 
               <View style={styles.navSectionBox}>
@@ -507,7 +623,11 @@ export default function HomeScreen() {
                   {lang === 'bn' ? 'ডেভেলপার তথ্য' : 'Developer Info'}
                 </Text>
                 <View style={styles.devRow}>
-                  <Ionicons name="code-slash-outline" size={18} color="#2563EB" />
+                  <Ionicons
+                    name="code-slash-outline"
+                    size={18}
+                    color="#2563EB"
+                  />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.devName}>Firoz Mahmud</Text>
                     <Text style={styles.devSub}>
@@ -761,11 +881,42 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
+    gap: 6,
   },
   drawerBrandLabel: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '800',
     color: '#0F172A',
+    flexShrink: 1,
+  },
+  drawerTopRightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  miniLangSwitch: {
+    flexDirection: 'row',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 8,
+    padding: 2,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  miniLangBtn: {
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  miniLangBtnActive: {
+    backgroundColor: '#2563EB',
+  },
+  miniLangText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#475569',
+  },
+  miniLangTextActive: {
+    color: '#FFFFFF',
   },
   drawerCloseBtn: {
     padding: 4,
@@ -805,6 +956,19 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#475569',
     marginTop: 2,
+  },
+  drawerGuestSuggestBox: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 13,
+    padding: 11,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    gap: 8,
+  },
+  drawerGuestSuggestTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1E3A8A',
   },
   navSectionBox: {
     backgroundColor: '#F8FAFC',
@@ -852,16 +1016,16 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
+    gap: 7,
     backgroundColor: '#2563EB',
-    paddingVertical: 11,
+    paddingVertical: 9,
     paddingHorizontal: 12,
-    borderRadius: 12,
+    borderRadius: 10,
   },
   drawerRegisterText: {
     color: '#FFFFFF',
     fontWeight: '700',
-    fontSize: 12.5,
+    fontSize: 12,
   },
   infoSectionBox: {
     backgroundColor: '#F8FAFC',

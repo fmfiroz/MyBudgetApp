@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
@@ -20,7 +20,20 @@ import {
   DASHBOARD_ENABLED_MODULES_KEY,
   DEFAULT_ENABLED_MODULE_IDS,
 } from '../constants/dashboardModules';
+import { saveLocalData } from '../utils/firebaseSync';
 import { saveToLocalFirst } from '../utils/localStorageManager';
+import {
+  createBusinessSheetRows,
+  createCustomSheetRows,
+  createSalarySheetRows,
+  EMPTY_YEAR_STORE,
+  FiscalYearStore,
+  formatFiscalYearLabel,
+  getIncomeStorageKey,
+  IncomeProfileKind,
+  IncomeSheetProfile,
+  parseYearStore,
+} from './income';
 
 export type AppLanguage = 'en' | 'bn';
 
@@ -43,10 +56,42 @@ export default function SettingsScreen() {
   const [shops, setShops] = useState<ShopProfile[]>([]);
   const [newShopName, setNewShopName] = useState<string>('');
 
+  // Income Sheets Management স্টেট
+  const getInitialFiscalStartYear = () => {
+    const now = new Date();
+    return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+  };
+
+  const [incomeFiscalYear, setIncomeFiscalYear] = useState<number>(
+    getInitialFiscalStartYear
+  );
+  const [incomeStore, setIncomeStore] =
+    useState<FiscalYearStore>(EMPTY_YEAR_STORE);
+  const [addIncomeModalVisible, setAddIncomeModalVisible] =
+    useState<boolean>(false);
+  const [newIncomeKind, setNewIncomeKind] =
+    useState<IncomeProfileKind>('salary');
+  const [newIncomeTitle, setNewIncomeTitle] = useState<string>('');
+  const [newIncomeCustomField, setNewIncomeCustomField] = useState<string>('');
+
   // Strict Delete Shop Confirmation Modal স্টেট
-  const [deleteTargetShop, setDeleteTargetShop] = useState<ShopProfile | null>(null);
+  const [deleteTargetShop, setDeleteTargetShop] = useState<ShopProfile | null>(
+    null
+  );
   const [deleteShopChecked, setDeleteShopChecked] = useState<boolean>(false);
-  const [deleteShopTypedConfirm, setDeleteShopTypedConfirm] = useState<string>('');
+  const [deleteShopTypedConfirm, setDeleteShopTypedConfirm] =
+    useState<string>('');
+
+  const incomeFiscalLabel = formatFiscalYearLabel(incomeFiscalYear);
+
+  const loadIncomeSheets = useCallback(async (startYr: number) => {
+    try {
+      const savedIncome = await AsyncStorage.getItem(getIncomeStorageKey(startYr));
+      setIncomeStore(parseYearStore(savedIncome));
+    } catch (e) {
+      console.log('Failed to load income sheets:', e);
+    }
+  }, []);
 
   const loadSettings = useCallback(async () => {
     try {
@@ -63,7 +108,9 @@ export default function SettingsScreen() {
       if (savedModules) {
         const parsedMods = JSON.parse(savedModules);
         if (Array.isArray(parsedMods)) {
-          const cleanIds = parsedMods.filter((id): id is string => typeof id === 'string');
+          const cleanIds = parsedMods.filter(
+            (id): id is string => typeof id === 'string'
+          );
           setEnabledModuleIds(cleanIds);
         }
       }
@@ -72,18 +119,28 @@ export default function SettingsScreen() {
         const parsed = JSON.parse(savedShops);
         if (Array.isArray(parsed)) {
           setShops(parsed);
-          return;
+        } else {
+          setShops([]);
         }
+      } else {
+        setShops([]);
       }
-      setShops([]);
+
+      await loadIncomeSheets(incomeFiscalYear);
     } catch (e) {
       console.log('Failed to load settings:', e);
     }
-  }, []);
+  }, [incomeFiscalYear, loadIncomeSheets]);
 
   useEffect(() => {
-    loadSettings();
+    void loadSettings();
   }, [loadSettings]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadIncomeSheets(incomeFiscalYear);
+    }, [incomeFiscalYear, loadIncomeSheets])
+  );
 
   const handleSelectLanguage = async (nextLang: AppLanguage) => {
     setLang(nextLang);
@@ -111,6 +168,109 @@ export default function SettingsScreen() {
     }
   };
 
+  const handleSelectIncomeSheet = async (sheetId: string) => {
+    const nextStore: FiscalYearStore = {
+      ...incomeStore,
+      initialized: true,
+      activeSheetId: sheetId,
+    };
+    setIncomeStore(nextStore);
+    await saveLocalData(getIncomeStorageKey(incomeFiscalYear), nextStore);
+  };
+
+  const handleOpenIncomeSheet = async (sheet: IncomeSheetProfile) => {
+    await handleSelectIncomeSheet(sheet.id);
+    router.push({
+      pathname: '/income',
+      params: {
+        sheetId: sheet.id,
+        fiscalStartYear: String(incomeFiscalYear),
+      },
+    } as never);
+  };
+
+  const handleCreateIncomeSheet = async () => {
+    const defaultTitle =
+      newIncomeKind === 'salary'
+        ? 'Salary & Allowances'
+        : newIncomeKind === 'daily'
+          ? 'Daily Income'
+          : newIncomeKind === 'business'
+            ? 'Business / Freelance'
+            : 'Custom Income';
+
+    const generatedRows =
+      newIncomeKind === 'salary'
+        ? createSalarySheetRows(0, true, 'July')
+        : newIncomeKind === 'daily'
+          ? []
+          : newIncomeKind === 'business'
+            ? createBusinessSheetRows(0)
+            : createCustomSheetRows(newIncomeCustomField, 0);
+
+    const newSheet: IncomeSheetProfile = {
+      id: `sheet-${newIncomeKind}-${Date.now()}`,
+      title: newIncomeTitle.trim() || defaultTitle,
+      kind: newIncomeKind,
+      rows: generatedRows,
+      dailyEntries: newIncomeKind === 'daily' ? [] : undefined,
+    };
+
+    const nextStore: FiscalYearStore = {
+      initialized: true,
+      activeSheetId: newSheet.id,
+      sheets: [...incomeStore.sheets, newSheet],
+    };
+
+    setIncomeStore(nextStore);
+    await saveLocalData(getIncomeStorageKey(incomeFiscalYear), nextStore);
+    setNewIncomeTitle('');
+    setNewIncomeCustomField('');
+    setAddIncomeModalVisible(false);
+  };
+
+  const handleDeleteIncomeSheet = (sheet: IncomeSheetProfile) => {
+    const removeSheet = async () => {
+      const remaining = incomeStore.sheets.filter((s) => s.id !== sheet.id);
+      const nextStore: FiscalYearStore = {
+        initialized: remaining.length > 0,
+        activeSheetId: remaining.length > 0 ? remaining[0].id : null,
+        sheets: remaining,
+      };
+      setIncomeStore(nextStore);
+      await saveLocalData(getIncomeStorageKey(incomeFiscalYear), nextStore);
+    };
+
+    if (Platform.OS === 'web') {
+      const confirmed =
+        typeof window !== 'undefined'
+          ? window.confirm(`"${sheet.title}" শিটটি মুছে ফেলতে চান?`)
+          : true;
+      if (confirmed) {
+        void removeSheet();
+      }
+      return;
+    }
+
+    Alert.alert(
+      lang === 'bn' ? 'শিট ডিলিট করুন' : 'Delete Income Sheet',
+      lang === 'bn'
+        ? `"${sheet.title}" (${incomeFiscalLabel}) শিটটি স্থায়ীভাবে মুছে ফেলতে চান?`
+        : `Permanently delete "${sheet.title}" (${incomeFiscalLabel})?`,
+      [
+        {
+          text: lang === 'bn' ? 'বাতিল' : 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: lang === 'bn' ? 'ডিলিট' : 'Delete',
+          style: 'destructive',
+          onPress: () => void removeSheet(),
+        },
+      ]
+    );
+  };
+
   const handleAddShop = async () => {
     const cleanName = newShopName.trim();
     if (!cleanName) {
@@ -123,7 +283,9 @@ export default function SettingsScreen() {
       return;
     }
 
-    const exists = shops.some((s) => s.name.trim().toLowerCase() === cleanName.toLowerCase());
+    const exists = shops.some(
+      (s) => s.name.trim().toLowerCase() === cleanName.toLowerCase()
+    );
     if (exists) {
       Alert.alert(
         lang === 'bn' ? 'ইতিমধ্যে আছে' : 'Duplicate Shop',
@@ -145,7 +307,7 @@ export default function SettingsScreen() {
     await saveToLocalFirst(SHOPS_LIST_KEY, updated);
   };
 
-const canConfirmStrictShopDelete = useMemo(() => {
+  const canConfirmStrictShopDelete = useMemo(() => {
     if (!deleteTargetShop || !deleteShopChecked) return false;
     const typed = deleteShopTypedConfirm.trim().toLowerCase();
     const targetName = deleteTargetShop.name.trim().toLowerCase();
@@ -163,7 +325,9 @@ const canConfirmStrictShopDelete = useMemo(() => {
     setDeleteShopTypedConfirm('');
   };
 
-  const safeModulesList = Array.isArray(ALL_DASHBOARD_MODULES) ? ALL_DASHBOARD_MODULES : [];
+  const safeModulesList = Array.isArray(ALL_DASHBOARD_MODULES)
+    ? ALL_DASHBOARD_MODULES
+    : [];
   const safeEnabledIds = Array.isArray(enabledModuleIds)
     ? enabledModuleIds
     : DEFAULT_ENABLED_MODULE_IDS;
@@ -181,7 +345,7 @@ const canConfirmStrictShopDelete = useMemo(() => {
           </Text>
           <Text style={styles.headerSub}>
             {lang === 'bn'
-              ? 'স্বয়ংক্রিয় সিঙ্ক, মডিউল, ভাষা ও ব্যবস্থাপনা'
+              ? 'স্বয়ংক্রিয় সিঙ্ক, মডিউল, ভাষা ও ব্যবস্থাপনা'
               : 'Automatic sync, modules, language & management'}
           </Text>
         </View>
@@ -202,23 +366,166 @@ const canConfirmStrictShopDelete = useMemo(() => {
             }}
           >
             <View style={{ flex: 1 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <View
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+              >
                 <Ionicons name="cloud-done-outline" size={18} color="#2563EB" />
                 <Text style={styles.cardTitle}>Firebase Cloud Sync</Text>
               </View>
               <Text style={[styles.cardDesc, { marginTop: 3 }]}>
                 {lang === 'bn'
-                  ? 'আপনার অ্যাকাউন্টের ডেটা স্বয়ংক্রিয়ভাবে সিঙ্ক হয়। অফলাইনে করা পরিবর্তন সংযোগ ফিরলে সিঙ্ক হবে।'
+                  ? 'আপনার অ্যাকাউন্টের ডেটা স্বয়ংক্রিয়ভাবে সিঙ্ক হয়। অফলাইনে করা পরিবর্তন সংযোগ ফিরলে সিঙ্ক হবে।'
                   : 'Account data syncs automatically. Offline changes sync when your connection returns.'}
               </Text>
             </View>
             <View style={styles.syncStatusPill}>
               <View style={styles.syncStatusDot} />
               <Text style={styles.syncStatusText}>
-                {lang === 'bn' ? 'স্বয়ংক্রিয়' : 'Automatic'}
+                {lang === 'bn' ? 'স্বয়ংক্রিয়' : 'Automatic'}
               </Text>
             </View>
           </View>
+        </View>
+
+        {/* Income Sheets Management Card (Main Setting) */}
+        <View style={styles.card}>
+          <View style={styles.incomeHeaderRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.cardTitle}>
+                {lang === 'bn'
+                  ? `Income Sheets (${incomeFiscalLabel})`
+                  : `Income Sheets (${incomeFiscalLabel})`}
+              </Text>
+              <Text style={styles.cardDesc}>
+                {lang === 'bn'
+                  ? 'শিট নির্বাচন করুন, নতুন Income যোগ করুন অথবা মুছুন।'
+                  : 'Select an active sheet, add new Income sheets, or delete existing ones.'}
+              </Text>
+            </View>
+
+            <View style={styles.yearMiniStepper}>
+              <TouchableOpacity
+                onPress={() => setIncomeFiscalYear((y) => y - 1)}
+              >
+                <Ionicons name="chevron-back" size={16} color="#1E40AF" />
+              </TouchableOpacity>
+              <Text style={styles.yearMiniText}>{incomeFiscalLabel}</Text>
+              <TouchableOpacity
+                onPress={() => setIncomeFiscalYear((y) => y + 1)}
+              >
+                <Ionicons name="chevron-forward" size={16} color="#1E40AF" />
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.incomeTopActions}>
+            <TouchableOpacity
+              style={[styles.addBtn, { backgroundColor: '#2563EB' }]}
+              onPress={() => {
+                setNewIncomeKind('salary');
+                setNewIncomeTitle('');
+                setNewIncomeCustomField('');
+                setAddIncomeModalVisible(true);
+              }}
+            >
+              <Ionicons name="add-circle-outline" size={17} color="#FFFFFF" />
+              <Text style={styles.addBtnText}>
+                {lang === 'bn' ? 'Add Income' : 'Add Income'}
+              </Text>
+            </TouchableOpacity>
+
+            {incomeStore.sheets.length > 0 && (
+              <TouchableOpacity
+                style={styles.goSheetBtn}
+                onPress={() => {
+                  const target =
+                    incomeStore.sheets.find(
+                      (s) => s.id === incomeStore.activeSheetId
+                    ) || incomeStore.sheets[0];
+                  void handleOpenIncomeSheet(target);
+                }}
+              >
+                <Ionicons name="open-outline" size={16} color="#1E3A8A" />
+                <Text style={styles.goSheetBtnText}>
+                  {lang === 'bn' ? 'Income পেজ খুলুন' : 'Open Income'}
+                </Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {incomeStore.sheets.length === 0 ? (
+            <Text style={styles.emptyShopHint}>
+              {lang === 'bn'
+                ? 'এই অর্থবছরে কোনো Income শিট নেই। "Add Income" চাপুন।'
+                : 'No income sheets in this fiscal year. Tap "Add Income".'}
+            </Text>
+          ) : (
+            <View style={{ gap: 7, marginTop: 4 }}>
+              {incomeStore.sheets.map((sheet) => {
+                const isSelected = incomeStore.activeSheetId === sheet.id;
+                return (
+                  <View
+                    key={sheet.id}
+                    style={[
+                      styles.incomeSheetItem,
+                      isSelected && styles.incomeSheetItemActive,
+                    ]}
+                  >
+                    <TouchableOpacity
+                      style={{ flex: 1 }}
+                      onPress={() => void handleSelectIncomeSheet(sheet.id)}
+                    >
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                      >
+                        <Ionicons
+                          name={
+                            isSelected
+                              ? 'radio-button-on'
+                              : 'radio-button-off'
+                          }
+                          size={16}
+                          color={isSelected ? '#2563EB' : '#64748B'}
+                        />
+                        <Text style={styles.shopItemName}>{sheet.title}</Text>
+                      </View>
+                      <Text style={styles.sheetSubMeta}>
+                        {sheet.kind.toUpperCase()} •{' '}
+                        {sheet.kind === 'daily'
+                          ? `${(sheet.dailyEntries || []).length} entries`
+                          : `${sheet.rows.length} rows`}
+                        {isSelected ? ' • Active' : ''}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.openSheetPill}
+                      onPress={() => void handleOpenIncomeSheet(sheet)}
+                    >
+                      <Text style={styles.openSheetPillText}>
+                        {lang === 'bn' ? 'খুলুন' : 'Open'}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={styles.strictDeleteTriggerBtn}
+                      onPress={() => handleDeleteIncomeSheet(sheet)}
+                    >
+                      <Ionicons
+                        name="trash-outline"
+                        size={15}
+                        color="#DC2626"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          )}
         </View>
 
         {/* Dashboard Modules Add / Remove Card */}
@@ -260,7 +567,9 @@ const canConfirmStrictShopDelete = useMemo(() => {
                     accessibilityLabel={`${isAdded ? 'Remove' : 'Add'} ${label}`}
                   >
                     <Ionicons
-                      name={isAdded ? 'remove-circle-outline' : 'add-circle-outline'}
+                      name={
+                        isAdded ? 'remove-circle-outline' : 'add-circle-outline'
+                      }
                       size={15}
                       color={isAdded ? '#DC2626' : '#FFFFFF'}
                     />
@@ -281,7 +590,12 @@ const canConfirmStrictShopDelete = useMemo(() => {
               style={[styles.langBtn, lang === 'en' && styles.langBtnActive]}
               onPress={() => handleSelectLanguage('en')}
             >
-              <Text style={[styles.langBtnText, lang === 'en' && styles.langBtnTextActive]}>
+              <Text
+                style={[
+                  styles.langBtnText,
+                  lang === 'en' && styles.langBtnTextActive,
+                ]}
+              >
                 English
               </Text>
             </TouchableOpacity>
@@ -290,7 +604,12 @@ const canConfirmStrictShopDelete = useMemo(() => {
               style={[styles.langBtn, lang === 'bn' && styles.langBtnActive]}
               onPress={() => handleSelectLanguage('bn')}
             >
-              <Text style={[styles.langBtnText, lang === 'bn' && styles.langBtnTextActive]}>
+              <Text
+                style={[
+                  styles.langBtnText,
+                  lang === 'bn' && styles.langBtnTextActive,
+                ]}
+              >
                 বাংলা
               </Text>
             </TouchableOpacity>
@@ -299,30 +618,22 @@ const canConfirmStrictShopDelete = useMemo(() => {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>
-            {lang === 'bn' ? 'আয় ও যানবাহন ব্যবস্থাপনা' : 'Income & Vehicle Management'}
+            {lang === 'bn' ? 'যানবাহন ব্যবস্থাপনা' : 'Vehicle Management'}
           </Text>
           <Text style={styles.cardDesc}>
             {lang === 'bn'
-              ? 'Income ও Vehicle পেজে নতুন sheet যোগ করুন। এখানে সেগুলো manage বা delete করুন।'
-              : 'Add sheets from the Income and Vehicle pages. Open management here to delete them.'}
+              ? 'Vehicle পেজে নতুন যানবাহন যোগ করুন। এখানে সেগুলো manage বা delete করুন।'
+              : 'Add vehicles from the Vehicle page. Open management here to delete them.'}
           </Text>
-          <TouchableOpacity
-            style={styles.settingActionRow}
-            onPress={() => router.push('/income?manageSheets=1' as never)}
-          >
-            <Ionicons name="cash-outline" size={19} color="#15803D" />
-            <Text style={styles.settingActionText}>
-              {lang === 'bn' ? 'Income Sheet মুছুন' : 'Delete Income Sheets'}
-            </Text>
-            <Ionicons name="chevron-forward" size={17} color="#64748B" />
-          </TouchableOpacity>
           <TouchableOpacity
             style={styles.settingActionRow}
             onPress={() => router.push('/vehicle-expense?manage=1' as never)}
           >
             <Ionicons name="car-outline" size={19} color="#C2410C" />
             <Text style={styles.settingActionText}>
-              {lang === 'bn' ? 'Vehicle পরিচালনা / মুছুন' : 'Manage / Delete Vehicles'}
+              {lang === 'bn'
+                ? 'Vehicle পরিচালনা / মুছুন'
+                : 'Manage / Delete Vehicles'}
             </Text>
             <Ionicons name="chevron-forward" size={17} color="#64748B" />
           </TouchableOpacity>
@@ -345,16 +656,16 @@ const canConfirmStrictShopDelete = useMemo(() => {
             <TextInput
               style={styles.input}
               placeholder={
-                lang === 'bn'
-                  ? 'নতুন দোকানের নাম লিখুন'
-                  : 'New shop name'
+                lang === 'bn' ? 'নতুন দোকানের নাম লিখুন' : 'New shop name'
               }
               value={newShopName}
               onChangeText={setNewShopName}
             />
             <TouchableOpacity style={styles.addBtn} onPress={handleAddShop}>
               <Ionicons name="add-circle-outline" size={18} color="#FFFFFF" />
-              <Text style={styles.addBtnText}>{lang === 'bn' ? 'যোগ' : 'Add'}</Text>
+              <Text style={styles.addBtnText}>
+                {lang === 'bn' ? 'যোগ' : 'Add'}
+              </Text>
             </TouchableOpacity>
           </View>
 
@@ -367,8 +678,19 @@ const canConfirmStrictShopDelete = useMemo(() => {
           ) : (
             shops.map((shop) => (
               <View key={shop.id} style={styles.shopItemRow}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
-                  <Ionicons name="storefront-outline" size={18} color="#1E3A8A" />
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 8,
+                    flex: 1,
+                  }}
+                >
+                  <Ionicons
+                    name="storefront-outline"
+                    size={18}
+                    color="#1E3A8A"
+                  />
                   <Text style={styles.shopItemName}>{shop.name}</Text>
                 </View>
 
@@ -389,8 +711,116 @@ const canConfirmStrictShopDelete = useMemo(() => {
         </View>
       </ScrollView>
 
+      {/* Add Income Sheet Modal */}
+      <Modal
+        visible={addIncomeModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setAddIncomeModalVisible(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalOverlay}
+        >
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>
+              {lang === 'bn'
+                ? `নতুন Income শিট যোগ করুন (${incomeFiscalLabel})`
+                : `Add Income Sheet (${incomeFiscalLabel})`}
+            </Text>
+
+            <Text style={styles.inputLabel}>
+              {lang === 'bn' ? 'আয়ের ধরন' : 'Income Type'}
+            </Text>
+            <View style={styles.kindChipsWrap}>
+              {(
+                [
+                  ['salary', 'Salary'],
+                  ['daily', 'Daily'],
+                  ['business', 'Business'],
+                  ['custom', 'Custom'],
+                ] as const
+              ).map(([kindKey, label]) => (
+                <TouchableOpacity
+                  key={kindKey}
+                  style={[
+                    styles.kindChip,
+                    newIncomeKind === kindKey && styles.kindChipActive,
+                  ]}
+                  onPress={() => setNewIncomeKind(kindKey)}
+                >
+                  <Text
+                    style={[
+                      styles.kindChipText,
+                      newIncomeKind === kindKey && styles.kindChipTextActive,
+                    ]}
+                  >
+                    {label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <Text style={styles.inputLabel}>
+              {lang === 'bn' ? 'শিটের নাম (ঐচ্ছিক)' : 'Sheet Name (Optional)'}
+            </Text>
+            <TextInput
+              style={styles.modalInput}
+              placeholder={
+                newIncomeKind === 'salary'
+                  ? 'e.g. Salary & Allowances'
+                  : newIncomeKind === 'daily'
+                    ? 'e.g. Daily Income'
+                    : newIncomeKind === 'business'
+                      ? 'e.g. Business / Freelance'
+                      : 'e.g. Tuition / Rent'
+              }
+              value={newIncomeTitle}
+              onChangeText={setNewIncomeTitle}
+            />
+
+            {newIncomeKind === 'custom' && (
+              <>
+                <Text style={styles.inputLabel}>
+                  {lang === 'bn' ? 'মূল আয়ের খাতের নাম' : 'Primary Income Item'}
+                </Text>
+                <TextInput
+                  style={styles.modalInput}
+                  placeholder="e.g. Monthly Rent"
+                  value={newIncomeCustomField}
+                  onChangeText={setNewIncomeCustomField}
+                />
+              </>
+            )}
+
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: '#E2E8F0' }]}
+                onPress={() => setAddIncomeModalVisible(false)}
+              >
+                <Text style={{ color: '#334155', fontWeight: '600' }}>
+                  {lang === 'bn' ? 'বাতিল' : 'Cancel'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalBtn, { backgroundColor: '#16A34A' }]}
+                onPress={() => void handleCreateIncomeSheet()}
+              >
+                <Text style={{ color: '#FFFFFF', fontWeight: '700' }}>
+                  {lang === 'bn' ? 'তৈরি করুন' : 'Create'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       {/* Strict Delete Shop Confirmation Modal */}
-      <Modal visible={Boolean(deleteTargetShop)} transparent animationType="fade">
+      <Modal
+        visible={Boolean(deleteTargetShop)}
+        transparent
+        animationType="fade"
+      >
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.modalOverlay}
@@ -408,7 +838,13 @@ const canConfirmStrictShopDelete = useMemo(() => {
 
               {deleteTargetShop && (
                 <View style={styles.strictBox}>
-                  <Text style={{ fontWeight: '700', color: '#991B1B', fontSize: 13.5 }}>
+                  <Text
+                    style={{
+                      fontWeight: '700',
+                      color: '#991B1B',
+                      fontSize: 13.5,
+                    }}
+                  >
                     Shop: {deleteTargetShop.name}
                   </Text>
                   <Text style={{ color: '#7F1D1D', fontSize: 12 }}>
@@ -466,7 +902,9 @@ const canConfirmStrictShopDelete = useMemo(() => {
                   style={[
                     styles.modalBtn,
                     {
-                      backgroundColor: canConfirmStrictShopDelete ? '#DC2626' : '#FCA5A5',
+                      backgroundColor: canConfirmStrictShopDelete
+                        ? '#DC2626'
+                        : '#FCA5A5',
                     },
                   ]}
                   onPress={handleConfirmStrictShopDelete}
@@ -532,6 +970,105 @@ const styles = StyleSheet.create({
   cardDesc: {
     fontSize: 12,
     color: '#64748B',
+  },
+  incomeHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  yearMiniStepper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+    borderRadius: 8,
+    gap: 3,
+  },
+  yearMiniText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: '#1E40AF',
+  },
+  incomeTopActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  goSheetBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#EFF6FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  goSheetBtnText: {
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  incomeSheetItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 9,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  incomeSheetItemActive: {
+    backgroundColor: '#EFF6FF',
+    borderColor: '#93C5FD',
+  },
+  sheetSubMeta: {
+    fontSize: 11,
+    color: '#64748B',
+    marginTop: 2,
+    marginLeft: 22,
+  },
+  openSheetPill: {
+    backgroundColor: '#1E3A8A',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  openSheetPillText: {
+    color: '#FFFFFF',
+    fontSize: 11.5,
+    fontWeight: '700',
+  },
+  kindChipsWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 12,
+  },
+  kindChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    backgroundColor: '#F8FAFC',
+  },
+  kindChipActive: {
+    backgroundColor: '#2563EB',
+    borderColor: '#2563EB',
+  },
+  kindChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  kindChipTextActive: {
+    color: '#FFFFFF',
   },
   settingActionRow: {
     minHeight: 44,

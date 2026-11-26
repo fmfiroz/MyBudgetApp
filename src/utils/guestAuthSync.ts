@@ -87,6 +87,14 @@ export async function getAuthSession(): Promise<AuthSessionState> {
   }
 }
 
+export async function isGuestModeActive(): Promise<boolean> {
+  const [session, owner] = await Promise.all([
+    getAuthSession(),
+    AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY),
+  ]);
+  return session.mode === 'guest' || owner === 'guest';
+}
+
 export async function clearAllLocalUserFinanceData(): Promise<void> {
   try {
     const allKeys = await AsyncStorage.getAllKeys();
@@ -137,7 +145,7 @@ async function getLocalAccountSnapshot(
     return snapshot;
   } catch (error) {
     console.error('Unable to read the local account snapshot:', error);
-    throw error;
+    return {};
   }
 }
 
@@ -146,7 +154,7 @@ async function saveGuestSnapshot(snapshot: Record<string, unknown>): Promise<voi
   await AsyncStorage.setItem(GUEST_DATA_SNAPSHOT_KEY, JSON.stringify(snapshot));
 }
 
-async function getGuestSnapshot(): Promise<Record<string, unknown>> {
+export async function getGuestSnapshot(): Promise<Record<string, unknown>> {
   const raw = await AsyncStorage.getItem(GUEST_DATA_SNAPSHOT_KEY);
   if (!raw) return {};
 
@@ -173,7 +181,7 @@ async function readUnassignedLegacyData(): Promise<Record<string, unknown>> {
     return snapshot;
   } catch (error) {
     console.error('Unable to read unassigned local data:', error);
-    throw error;
+    return {};
   }
 }
 
@@ -237,20 +245,6 @@ export async function startGuestSession(
       ? existing.userId
       : `guest_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-  // আগে থেকে সেভ করা Guest ডেটা থাকলে লোকাল স্টোরেজে ফিরিয়ে আনা
-  const savedGuestData = await getGuestSnapshot();
-  if (Object.keys(savedGuestData).length > 0) {
-    await hydrateLocalDataFromCloud(savedGuestData);
-  }
-
-  const importedCount = await claimUnassignedLegacyData(
-    guestId,
-    confirmLegacyDataImport
-  );
-  if (importedCount > 0) {
-    await hydrateLocalDataFromCloud(await getLocalAccountSnapshot(guestId));
-  }
-
   const nextState: AuthSessionState = {
     mode: 'guest',
     userId: guestId,
@@ -263,6 +257,20 @@ export async function startGuestSession(
     [SESSION_STORAGE_KEY, JSON.stringify(nextState)],
     [LOCAL_DATA_OWNER_KEY, 'guest'],
   ]);
+
+  // আগে থেকে সেভ করা Guest ডেটা থাকলে লোকাল স্টোরেজে ফিরিয়ে আনা
+  const savedGuestData = await getGuestSnapshot();
+  if (Object.keys(savedGuestData).length > 0) {
+    await hydrateLocalDataFromCloud(savedGuestData);
+  }
+
+  const importedCount = await claimUnassignedLegacyData(
+    guestId,
+    confirmLegacyDataImport
+  );
+  if (importedCount > 0) {
+    await hydrateLocalDataFromCloud(await getLocalAccountSnapshot(guestId));
+  }
 
   return nextState;
 }
@@ -389,11 +397,16 @@ async function initializeUserAccount(
   clearedOtherUser: boolean;
 }> {
   assertCurrentInitialization(params.userId, generation);
+  stopFirebaseSync();
+
   const currentOwner = await AsyncStorage.getItem(LOCAL_DATA_OWNER_KEY);
+  const currentSession = await getAuthSession();
+  const wasGuest = currentOwner === 'guest' || currentSession.mode === 'guest';
   assertCurrentInitialization(params.userId, generation);
 
   let clearedOtherUser = false;
 
+  // আগের কোনো Registered ইউজারের লোকাল ডেটা সেই ইউজারের স্ন্যাপশটে সেভ করে রাখা
   if (
     currentOwner &&
     currentOwner !== 'guest' &&
@@ -405,27 +418,26 @@ async function initializeUserAccount(
     assertCurrentInitialization(params.userId, generation);
   }
 
-  const [activeGuestData, savedGuestSnapshot, accountSnapshot] =
+  // Guest ডেটা সংগ্রহ (সক্রিয় লোকাল ডেটা + সেভ করা Guest স্ন্যাপশট)
+  const [activeGuestData, savedGuestSnapshot, unownedData] =
     await Promise.all([
-      currentOwner === 'guest'
-        ? collectAllLocalAppData()
-        : Promise.resolve({}),
+      wasGuest ? collectAllLocalAppData() : Promise.resolve({}),
       getGuestSnapshot(),
       !currentOwner ? quarantineUnownedLocalData() : Promise.resolve({}),
     ]);
   assertCurrentInitialization(params.userId, generation);
 
-  const guestSnapshot = {
+  const guestSnapshot: Record<string, unknown> = {
     ...savedGuestSnapshot,
     ...activeGuestData,
   };
 
-  if (currentOwner === 'guest' && Object.keys(guestSnapshot).length > 0) {
+  if (wasGuest && Object.keys(guestSnapshot).length > 0) {
     await saveGuestSnapshot(guestSnapshot);
     assertCurrentInitialization(params.userId, generation);
   }
 
-  if (!currentOwner && Object.keys(accountSnapshot).length > 0) {
+  if (!currentOwner && Object.keys(unownedData).length > 0) {
     await clearAllLocalUserFinanceData();
     assertCurrentInitialization(params.userId, generation);
   }
@@ -435,13 +447,16 @@ async function initializeUserAccount(
     params.confirmLegacyDataImport
   );
   assertCurrentInitialization(params.userId, generation);
+
   const userAccountSnapshot = await getLocalAccountSnapshot(params.userId);
   assertCurrentInitialization(params.userId, generation);
 
+  // ক্লাউড থেকে এই Registered ইউজারের নিজস্ব সেভ করা ডেটা আনা
   const cloudData = params.fetchCloudDataFn
     ? await params.fetchCloudDataFn(params.userId)
     : null;
   assertCurrentInitialization(params.userId, generation);
+
   const pendingChanges = await getPendingLocalChangesForUser(params.userId);
   assertCurrentInitialization(params.userId, generation);
 
@@ -450,45 +465,26 @@ async function initializeUserAccount(
     currentOwner === params.userId ? await collectAllLocalAppData() : {};
   assertCurrentInitialization(params.userId, generation);
 
-  const localFallback = {
+  // Guest মোড থেকে রেজিস্টার/লগইন করলে Guest ডেটা নতুন অ্যাকাউন্টে যুক্ত হবে;
+  // অন্যথায় শুধু Registered ইউজারের নিজস্ব লোকাল/ক্লাউড ডেটাই ব্যবহৃত হবে
+  const localFallback: Record<string, unknown> = {
     ...userAccountSnapshot,
     ...activeUserSnapshot,
-    ...(currentOwner === 'guest' ? guestSnapshot : {}),
+    ...(wasGuest ? guestSnapshot : {}),
   };
 
-  const restoredData = {
+  const restoredData: Record<string, unknown> = {
     ...localFallback,
     ...(cloudData ?? {}),
+    ...(wasGuest ? guestSnapshot : {}),
     ...pendingChanges,
   };
 
-  if (currentOwner && currentOwner !== params.userId) {
+  // ভিন্ন ইউজার বা Guest থেকে এলে আগে লোকাল ফাইন্যান্স ডেটা পরিষ্কার করে নতুন ইউজারের ডেটা বসানো
+  if (wasGuest || (currentOwner && currentOwner !== params.userId)) {
     await clearAllLocalUserFinanceData();
     assertCurrentInitialization(params.userId, generation);
     clearedOtherUser = true;
-  }
-
-  const shouldUploadSnapshot =
-    Object.keys(restoredData).length > 0 &&
-    (!cloudHasData ||
-      Object.keys(localFallback).length > 0 ||
-      Object.keys(pendingChanges).length > 0);
-  if (shouldUploadSnapshot && params.saveCloudDataFn) {
-    assertCurrentInitialization(params.userId, generation);
-    await params.saveCloudDataFn(params.userId, restoredData);
-    assertCurrentInitialization(params.userId, generation);
-  }
-
-  const hydratedCount = await hydrateLocalDataFromCloud(
-    restoredData,
-    params.userId
-  );
-  assertCurrentInitialization(params.userId, generation);
-  const syncedGuestCount =
-    currentOwner === 'guest' ? Object.keys(guestSnapshot).length : 0;
-
-  if (currentOwner === 'guest' && syncedGuestCount > 0) {
-    await AsyncStorage.removeItem(GUEST_DATA_SNAPSHOT_KEY);
   }
 
   await setRegisteredSession({
@@ -497,6 +493,34 @@ async function initializeUserAccount(
     displayName: params.displayName,
   });
   assertCurrentInitialization(params.userId, generation);
+
+  const hydratedCount = await hydrateLocalDataFromCloud(
+    restoredData,
+    params.userId
+  );
+  assertCurrentInitialization(params.userId, generation);
+
+  const syncedGuestCount = wasGuest ? Object.keys(guestSnapshot).length : 0;
+
+  const shouldUploadSnapshot =
+    Object.keys(restoredData).length > 0 &&
+    (!cloudHasData ||
+      Object.keys(localFallback).length > 0 ||
+      Object.keys(pendingChanges).length > 0 ||
+      syncedGuestCount > 0);
+
+  if (shouldUploadSnapshot && params.saveCloudDataFn) {
+    assertCurrentInitialization(params.userId, generation);
+    await params.saveCloudDataFn(params.userId, restoredData);
+    assertCurrentInitialization(params.userId, generation);
+  }
+
+  // সফলভাবে নতুন অ্যাকাউন্টে ট্রান্সফার হয়ে গেলে Guest স্ন্যাপশট মুছে ফেলা
+  if (wasGuest && syncedGuestCount > 0) {
+    await AsyncStorage.removeItem(GUEST_DATA_SNAPSHOT_KEY);
+    await AsyncStorage.removeItem(PENDING_MIGRATION_KEY);
+  }
+
   await startFirebaseSync(params.userId);
 
   return {
